@@ -2,7 +2,8 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { 
   Trophy, Users, Play, Copy, Check, MessageSquare, History, 
   Award, ShieldAlert, Sparkles, RotateCcw, 
-  UserPlus, Bot, Crown, HelpCircle, ChevronRight, LogOut, Flame, Wifi, Download, Monitor
+  UserPlus, Bot, Crown, HelpCircle, ChevronRight, LogOut, Flame, Wifi, Download, Monitor,
+  Settings, Volume2, VolumeX, Maximize, Minimize, Sliders
 } from 'lucide-react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
@@ -28,6 +29,190 @@ if (firebaseConfig) {
     console.warn('Initialisation Firebase ignorée:', e);
   }
 }
+
+// ==========================================
+// 1bis. MOTEUR AUDIO SYNTHÉTIQUE (WEB AUDIO API)
+// ==========================================
+class SoundEngine {
+  constructor() {
+    this.ctx = null;
+    this.settings = {
+      muted: false,
+      master: 80,
+      cards: 85,
+      announces: 90,
+      ui: 75
+    };
+  }
+
+  updateSettings(newSettings) {
+    this.settings = { ...this.settings, ...newSettings };
+  }
+
+  getContext() {
+    if (typeof window === 'undefined') return null;
+    if (!this.ctx) {
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      if (AudioCtx) this.ctx = new AudioCtx();
+    }
+    if (this.ctx && this.ctx.state === 'suspended') {
+      this.ctx.resume().catch(() => {});
+    }
+    return this.ctx;
+  }
+
+  getGain(category) {
+    if (this.settings.muted) return 0;
+    const master = (this.settings.master ?? 80) / 100;
+    const cat = (this.settings[category] ?? 80) / 100;
+    return master * cat;
+  }
+
+  // Son de clic d'interface
+  playClick() {
+    const vol = this.getGain('ui');
+    if (vol <= 0.01) return;
+    const ctx = this.getContext();
+    if (!ctx) return;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(520, ctx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(220, ctx.currentTime + 0.045);
+    gain.gain.setValueAtTime(0.18 * vol, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.045);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start();
+    osc.stop(ctx.currentTime + 0.05);
+  }
+
+  // Son de pose de carte sur le tapis feutré
+  playCardSlap() {
+    const vol = this.getGain('cards');
+    if (vol <= 0.01) return;
+    const ctx = this.getContext();
+    if (!ctx) return;
+
+    // Bruit blanc filtré (frottement carte sur feutrine)
+    const bufferSize = ctx.sampleRate * 0.075;
+    const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < bufferSize; i++) {
+      data[i] = (Math.random() * 2 - 1) * Math.exp(-i / (bufferSize * 0.32));
+    }
+    const noise = ctx.createBufferSource();
+    noise.buffer = buffer;
+
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'bandpass';
+    filter.frequency.setValueAtTime(1100, ctx.currentTime);
+    filter.Q.setValueAtTime(1.2, ctx.currentTime);
+
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0.45 * vol, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.075);
+
+    noise.connect(filter);
+    filter.connect(gain);
+    gain.connect(ctx.destination);
+    noise.start();
+  }
+
+  // Son de ramassage du pli
+  playTrickSweep() {
+    const vol = this.getGain('cards');
+    if (vol <= 0.01) return;
+    const ctx = this.getContext();
+    if (!ctx) return;
+
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(240, ctx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(480, ctx.currentTime + 0.14);
+    gain.gain.setValueAtTime(0.22 * vol, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.15);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start();
+    osc.stop(ctx.currentTime + 0.16);
+  }
+
+  // Son d'annonce / enchère
+  playBidSound(type = 'BID') {
+    const vol = this.getGain('announces');
+    if (vol <= 0.01) return;
+    const ctx = this.getContext();
+    if (!ctx) return;
+
+    const now = ctx.currentTime;
+    if (type === 'PASS') {
+      const osc = ctx.createOscillator();
+      const g = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(300, now);
+      osc.frequency.exponentialRampToValueAtTime(190, now + 0.09);
+      g.gain.setValueAtTime(0.16 * vol, now);
+      g.gain.exponentialRampToValueAtTime(0.001, now + 0.09);
+      osc.connect(g);
+      g.connect(ctx.destination);
+      osc.start(now);
+      osc.stop(now + 0.1);
+    } else if (type === 'COINCHE' || type === 'SURCOINCHE') {
+      [440, 554.37, 659.25].forEach((freq, idx) => {
+        const osc = ctx.createOscillator();
+        const g = ctx.createGain();
+        osc.type = 'sawtooth';
+        osc.frequency.setValueAtTime(freq, now + idx * 0.055);
+        g.gain.setValueAtTime(0.18 * vol, now + idx * 0.055);
+        g.gain.exponentialRampToValueAtTime(0.001, now + idx * 0.055 + 0.18);
+        osc.connect(g);
+        g.connect(ctx.destination);
+        osc.start(now + idx * 0.055);
+        osc.stop(now + idx * 0.055 + 0.19);
+      });
+    } else {
+      // Annonce normale ou Belote
+      [523.25, 659.25].forEach((freq, idx) => {
+        const osc = ctx.createOscillator();
+        const g = ctx.createGain();
+        osc.type = 'triangle';
+        osc.frequency.setValueAtTime(freq, now + idx * 0.06);
+        g.gain.setValueAtTime(0.22 * vol, now + idx * 0.06);
+        g.gain.exponentialRampToValueAtTime(0.001, now + idx * 0.06 + 0.12);
+        osc.connect(g);
+        g.connect(ctx.destination);
+        osc.start(now + idx * 0.06);
+        osc.stop(now + idx * 0.06 + 0.13);
+      });
+    }
+  }
+
+  // Fanfare fin de manche
+  playRoundEnd(success = true) {
+    const vol = this.getGain('announces');
+    if (vol <= 0.01) return;
+    const ctx = this.getContext();
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    const notes = success ? [523.25, 659.25, 783.99, 1046.5] : [392.0, 349.23, 311.13, 261.63];
+    notes.forEach((freq, idx) => {
+      const osc = ctx.createOscillator();
+      const g = ctx.createGain();
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(freq, now + idx * 0.08);
+      g.gain.setValueAtTime(0.24 * vol, now + idx * 0.08);
+      g.gain.exponentialRampToValueAtTime(0.001, now + idx * 0.08 + 0.22);
+      osc.connect(g);
+      g.connect(ctx.destination);
+      osc.start(now + idx * 0.08);
+      osc.stop(now + idx * 0.08 + 0.24);
+    });
+  }
+}
+
+const soundEngine = new SoundEngine();
 
 // ==========================================
 // 2. CONSTANTES & RÈGLES DE LA CONTRÉE
@@ -57,6 +242,27 @@ const TRUMP_POINTS     = { '7': 0, '8': 0, 'Q': 3, 'K': 4, '10': 10, 'A': 11, '9
 const BID_VALUES = [80, 90, 100, 110, 120, 130, 140, 150, 160, 250]; // 250 = Capot
 const SEATS = ['S', 'W', 'N', 'E']; // Sens de jeu (horaire : Sud -> Ouest -> Nord -> Est)
 const SEAT_NAMES = { 'S': 'Sud', 'W': 'Ouest', 'N': 'Nord', 'E': 'Est' };
+
+const BOT_DIFFICULTIES = {
+  BEGINNER: {
+    id: 'BEGINNER',
+    label: 'Débutant',
+    shortDesc: 'Idéal pour découvrir la Contrée en douceur',
+    badgeColor: 'bg-sky-500/20 text-sky-300 border-sky-400/40'
+  },
+  INTERMEDIATE: {
+    id: 'INTERMEDIATE',
+    label: 'Confirmé',
+    shortDesc: 'Niveau intermédiaire équilibré et réaliste',
+    badgeColor: 'bg-amber-500/20 text-amber-300 border-amber-400/40'
+  },
+  PRO: {
+    id: 'PRO',
+    label: 'Professionnel',
+    shortDesc: 'Comptage des 32 cartes, appels et mémoire totale',
+    badgeColor: 'bg-rose-500/20 text-rose-300 border-rose-400/40'
+  }
+};
 
 const QUICK_CHATS = [
   "Bien joué ! 👏",
@@ -266,7 +472,7 @@ function getPlayableCardIds(hand, currentTrick, trumpSuit, mySeat) {
 }
 
 // ==========================================
-// 4. INTELLIGENCE ARTIFICIELLE PRO
+// 4. INTELLIGENCE ARTIFICIELLE (DÉBUTANT, CONFIRMÉ, PRO)
 // ==========================================
 
 function evaluateSuitForBid(hand, suit) {
@@ -315,7 +521,82 @@ function evaluateSuitForBid(hand, suit) {
   return score;
 }
 
-function decideBotBid(gameState, botSeat) {
+// --- NIVEAU DÉBUTANT : Enchères prudentes et simples ---
+function decideBotBidBeginner(gameState, botSeat) {
+  const hand = gameState.hands[botSeat] || [];
+  const highestBid = gameState.highestBid;
+
+  if (gameState.coincheStatus > 1) return { type: 'PASS' };
+
+  let bestSuit = 'H';
+  let maxScore = 0;
+  for (const s of SUITS) {
+    const sc = evaluateSuitForBid(hand, s);
+    if (sc > maxScore) {
+      maxScore = sc;
+      bestSuit = s;
+    }
+  }
+
+  let maxBidAllowed = 0;
+  if (maxScore >= 98) maxBidAllowed = 100;
+  else if (maxScore >= 76) maxBidAllowed = 90;
+  else if (maxScore >= 58) maxBidAllowed = 80;
+
+  const minNextBid = highestBid ? highestBid.value + 10 : 80;
+  if (maxBidAllowed >= minNextBid && minNextBid <= 100) {
+    return { type: 'BID', value: minNextBid, suit: bestSuit };
+  }
+  return { type: 'PASS' };
+}
+
+// --- NIVEAU CONFIRMÉ : Enchères intermédiaires ---
+function decideBotBidIntermediate(gameState, botSeat) {
+  const hand = gameState.hands[botSeat] || [];
+  const highestBid = gameState.highestBid;
+  const partnerSeat = getPartner(botSeat);
+  const myTeam = getTeam(botSeat);
+
+  if (gameState.coincheStatus > 1) return { type: 'PASS' };
+
+  // Contre uniquement si l'adversaire monte très haut (>= 130) et qu'on a Valet + 9 d'atout
+  if (highestBid && getTeam(highestBid.seat) !== myTeam && highestBid.value >= 130) {
+    const myTrumps = hand.filter(c => c.suit === highestBid.suit);
+    if (myTrumps.some(c => c.rank === 'J') && myTrumps.some(c => c.rank === '9')) {
+      return { type: 'COINCHE' };
+    }
+  }
+
+  let bestSuit = 'H';
+  let maxScore = 0;
+  for (const s of SUITS) {
+    const sc = evaluateSuitForBid(hand, s);
+    if (sc > maxScore) {
+      maxScore = sc;
+      bestSuit = s;
+    }
+  }
+
+  let maxBidAllowed = 0;
+  if (maxScore >= 120) maxBidAllowed = 130;
+  else if (maxScore >= 104) maxBidAllowed = 120;
+  else if (maxScore >= 90) maxBidAllowed = 110;
+  else if (maxScore >= 76) maxBidAllowed = 100;
+  else if (maxScore >= 64) maxBidAllowed = 90;
+  else if (maxScore >= 52) maxBidAllowed = 80;
+
+  const minNextBid = highestBid ? highestBid.value + 10 : 80;
+  if (highestBid && highestBid.seat === partnerSeat && maxBidAllowed <= highestBid.value + 10) {
+    return { type: 'PASS' };
+  }
+  if (maxBidAllowed >= minNextBid && minNextBid <= 130) {
+    return { type: 'BID', value: minNextBid, suit: bestSuit };
+  }
+  return { type: 'PASS' };
+}
+
+// --- NIVEAU PROFESSIONNEL (100% IDENTIQUE À L'ORIGINAL) ---
+function decideBotBidPro(gameState, botSeat) {
   const hand = gameState.hands[botSeat] || [];
   const highestBid = gameState.highestBid;
   const partnerSeat = getPartner(botSeat);
@@ -435,6 +716,13 @@ function decideBotBid(gameState, botSeat) {
   return { type: 'PASS' };
 }
 
+function decideBotBid(gameState, botSeat) {
+  const diff = gameState.botDifficulty || 'PRO';
+  if (diff === 'BEGINNER') return decideBotBidBeginner(gameState, botSeat);
+  if (diff === 'INTERMEDIATE') return decideBotBidIntermediate(gameState, botSeat);
+  return decideBotBidPro(gameState, botSeat);
+}
+
 function buildBotMemory(gameState, botSeat) {
   const trump = gameState.trumpSuit;
   const hand = gameState.hands[botSeat] || [];
@@ -503,7 +791,66 @@ function buildBotMemory(gameState, botSeat) {
   };
 }
 
-function decideBotCard(gameState, botSeat) {
+// --- JEU DE LA CARTE NIVEAU DÉBUTANT ---
+function decideBotCardBeginner(gameState, botSeat) {
+  const hand = gameState.hands[botSeat] || [];
+  const playableIds = getPlayableCardIds(hand, gameState.currentTrick, gameState.trumpSuit, botSeat);
+  const playableCards = hand.filter(c => playableIds.includes(c.id));
+  if (playableCards.length === 1) return playableCards[0];
+
+  const trump = gameState.trumpSuit;
+  // Un bot débutant ne compte pas les cartes tombées et joue parfois une petite carte ou une carte aléatoire légale
+  if (cryptoRandomInt(100) < 40) {
+    return playableCards[cryptoRandomInt(playableCards.length)];
+  }
+  // Sinon il joue simplement sa carte la plus faible en points pour ne pas donner de gros points
+  return [...playableCards].sort((a, b) => getCardPoints(a, trump) - getCardPoints(b, trump))[0];
+}
+
+// --- JEU DE LA CARTE NIVEAU CONFIRMÉ ---
+function decideBotCardIntermediate(gameState, botSeat) {
+  const hand = gameState.hands[botSeat] || [];
+  const playableIds = getPlayableCardIds(hand, gameState.currentTrick, gameState.trumpSuit, botSeat);
+  const playableCards = hand.filter(c => playableIds.includes(c.id));
+  if (playableCards.length === 1) return playableCards[0];
+
+  const trump = gameState.trumpSuit;
+  const trick = gameState.currentTrick || [];
+  const partnerSeat = getPartner(botSeat);
+
+  // En ouverture : joue un As hors atout s'il en a un, sinon une petite carte
+  if (trick.length === 0) {
+    const sideAces = playableCards.filter(c => c.suit !== trump && c.rank === 'A');
+    if (sideAces.length > 0) return sideAces[0];
+    return [...playableCards].sort((a, b) => getCardPoints(a, trump) - getCardPoints(b, trump))[0];
+  }
+
+  const currentWinner = getTrickWinner(trick, trump);
+  if (currentWinner.seat === partnerSeat) {
+    // Si le partenaire est maître en dernier joueur, il met des points
+    if (trick.length === 3) {
+      const nonTrumpPoints = playableCards
+        .filter(c => c.suit !== trump)
+        .sort((a, b) => getCardPoints(b, trump) - getCardPoints(a, trump));
+      if (nonTrumpPoints.length > 0) return nonTrumpPoints[0];
+    }
+    return [...playableCards].sort((a, b) => getCardPoints(a, trump) - getCardPoints(b, trump))[0];
+  }
+
+  // Essaie de prendre le pli avec sa carte gagnante la plus haute
+  const winningOptions = playableCards.filter(card => {
+    const sim = [...trick, { seat: botSeat, card }];
+    return getTrickWinner(sim, trump).seat === botSeat;
+  });
+  if (winningOptions.length > 0) {
+    return winningOptions.sort((a, b) => getCardPower(b, trump) - getCardPower(a, trump))[0];
+  }
+
+  return [...playableCards].sort((a, b) => getCardPoints(a, trump) - getCardPoints(b, trump))[0];
+}
+
+// --- JEU DE LA CARTE NIVEAU PROFESSIONNEL (100% IDENTIQUE À L'ORIGINAL) ---
+function decideBotCardPro(gameState, botSeat) {
   const hand = gameState.hands[botSeat] || [];
   const playableIds = getPlayableCardIds(hand, gameState.currentTrick, gameState.trumpSuit, botSeat);
   const playableCards = hand.filter(c => playableIds.includes(c.id));
@@ -640,6 +987,13 @@ function decideBotCard(gameState, botSeat) {
     if (ptDiff !== 0) return ptDiff;
     return getCardPower(a, trump) - getCardPower(b, trump);
   })[0];
+}
+
+function decideBotCard(gameState, botSeat) {
+  const diff = gameState.botDifficulty || 'PRO';
+  if (diff === 'BEGINNER') return decideBotCardBeginner(gameState, botSeat);
+  if (diff === 'INTERMEDIATE') return decideBotCardIntermediate(gameState, botSeat);
+  return decideBotCardPro(gameState, botSeat);
 }
 
 // ==========================================
@@ -784,6 +1138,101 @@ export default function App() {
   const [errorMsg, setErrorMsg] = useState('');
   const [p2pStatus, setP2pStatus] = useState('IDLE');
 
+  // Paramètres Globaux (Difficulté Bots, Audio, Plein Écran)
+  const [botDifficulty, setBotDifficulty] = useState(() => {
+    try {
+      return localStorage.getItem('contree_bot_diff') || 'PRO';
+    } catch (e) {
+      return 'PRO';
+    }
+  });
+
+  const [audioSettings, setAudioSettings] = useState(() => {
+    try {
+      const saved = localStorage.getItem('contree_audio_settings');
+      if (saved) return JSON.parse(saved);
+    } catch (e) {}
+    return {
+      muted: false,
+      master: 80,
+      cards: 85,
+      announces: 90,
+      ui: 75
+    };
+  });
+
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [showSettingsModal, setShowSettingsModal] = useState(false);
+
+  // Synchronisation avec le moteur audio et localStorage
+  useEffect(() => {
+    soundEngine.updateSettings(audioSettings);
+    try {
+      localStorage.setItem('contree_audio_settings', JSON.stringify(audioSettings));
+    } catch (e) {}
+  }, [audioSettings]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('contree_bot_diff', botDifficulty);
+    } catch (e) {}
+    if (gameStateRef.current && (mode === 'LOCAL' || gameStateRef.current.hostId === myUid)) {
+      const updated = { ...gameStateRef.current, botDifficulty };
+      gameStateRef.current = updated;
+      setGameState(updated);
+    }
+  }, [botDifficulty]);
+
+  // Force la suppression de toute marge ou bordure noire sur le body/root (notamment dans Vite par défaut)
+  useEffect(() => {
+    if (typeof document !== 'undefined') {
+      document.documentElement.style.margin = '0';
+      document.documentElement.style.padding = '0';
+      document.documentElement.style.width = '100%';
+      document.documentElement.style.height = '100%';
+      document.documentElement.style.backgroundColor = '#022c22';
+
+      document.body.style.margin = '0';
+      document.body.style.padding = '0';
+      document.body.style.width = '100%';
+      document.body.style.height = '100%';
+      document.body.style.overflow = 'hidden';
+      document.body.style.backgroundColor = '#022c22';
+
+      const rootEl = document.getElementById('root');
+      if (rootEl) {
+        rootEl.style.maxWidth = 'none';
+        rootEl.style.width = '100vw';
+        rootEl.style.height = '100vh';
+        rootEl.style.margin = '0';
+        rootEl.style.padding = '0';
+      }
+
+      const handleFsChange = () => {
+        setIsFullscreen(Boolean(document.fullscreenElement));
+      };
+      document.addEventListener('fullscreenchange', handleFsChange);
+      return () => document.removeEventListener('fullscreenchange', handleFsChange);
+    }
+  }, []);
+
+  const toggleFullscreen = async (wantFullscreen) => {
+    soundEngine.playClick();
+    if (typeof document === 'undefined') return;
+    try {
+      const targetState = typeof wantFullscreen === 'boolean' ? wantFullscreen : !document.fullscreenElement;
+      if (targetState && !document.fullscreenElement) {
+        await document.documentElement.requestFullscreen();
+        setIsFullscreen(true);
+      } else if (!targetState && document.fullscreenElement) {
+        await document.exitFullscreen();
+        setIsFullscreen(false);
+      }
+    } catch (e) {
+      console.warn('Plein écran non supporté dans ce contexte:', e);
+    }
+  };
+
   // États pour le Pont Direct WebRTC
   const [rtcRole, setRtcRole] = useState(null);
   const [rtcLocalToken, setRtcLocalToken] = useState('');
@@ -859,7 +1308,7 @@ export default function App() {
       '  <script src="https://cdn.tailwindcss.com"><' + '/script>',
       '  <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"><' + '/script>',
       '</head>',
-      '<body class="bg-stone-950 text-white m-0 p-0 overflow-hidden select-none font-sans">',
+      '<body class="bg-emerald-950 text-white m-0 p-0 overflow-hidden select-none font-sans">',
       '  <div class="h-screen w-screen flex flex-col items-center justify-center bg-gradient-to-b from-emerald-900 via-emerald-950 to-stone-950 p-6 text-center">',
       '    <div class="max-w-lg w-full bg-stone-900/95 border-2 border-amber-500/50 rounded-3xl p-8 shadow-2xl space-y-5">',
       '      <div class="inline-block bg-amber-400 text-stone-950 font-black text-xs uppercase px-4 py-1 rounded-full">Application PC Autonome</div>',
@@ -962,6 +1411,7 @@ export default function App() {
   };
 
   const createPeerJsRoom = async () => {
+    soundEngine.playClick();
     cleanupP2P();
     setErrorMsg('');
     setP2pStatus('CONNECTING');
@@ -1025,6 +1475,7 @@ export default function App() {
   };
 
   const joinPeerJsRoom = async () => {
+    soundEngine.playClick();
     const clean = roomCodeInput.trim().toUpperCase();
     if (!clean) {
       setErrorMsg("Entre le code à 5 lettres de ton pote !");
@@ -1081,6 +1532,7 @@ export default function App() {
   }, []);
 
   const safeCopyText = async (text) => {
+    soundEngine.playClick();
     try {
       if (navigator.clipboard && navigator.clipboard.writeText) {
         await navigator.clipboard.writeText(text);
@@ -1155,6 +1607,7 @@ export default function App() {
   };
 
   const startWebRTCHost = async () => {
+    soundEngine.playClick();
     cleanupP2P();
     setErrorMsg('');
     setRtcRole('HOST');
@@ -1196,6 +1649,7 @@ export default function App() {
   };
 
   const startWebRTCGuest = () => {
+    soundEngine.playClick();
     cleanupP2P();
     setErrorMsg('');
     setRtcRole('GUEST');
@@ -1206,6 +1660,7 @@ export default function App() {
   };
 
   const handleGuestAcceptOffer = async () => {
+    soundEngine.playClick();
     setErrorMsg('');
     if (!rtcRemoteInput.trim()) {
       setErrorMsg("Colle d'abord le Code 1 envoyé par ton pote !");
@@ -1249,6 +1704,7 @@ export default function App() {
   };
 
   const handleHostAcceptAnswer = async () => {
+    soundEngine.playClick();
     setErrorMsg('');
     if (!rtcRemoteInput.trim() || !rtcPeerRef.current) {
       setErrorMsg("Colle le Code Réponse 2 envoyé par ton pote !");
@@ -1297,6 +1753,7 @@ export default function App() {
       hostId,
       createdAt: Date.now(),
       status: isLocal ? 'BIDDING' : 'LOBBY',
+      botDifficulty,
       targetScore: 1500,
       dealer: 'E',
       currentTurn: 'S',
@@ -1336,16 +1793,18 @@ export default function App() {
   };
 
   const startQuickGame = () => {
+    soundEngine.playClick();
     cleanupP2P();
     const initial = createInitialState(myUid, pseudo.trim() || 'Sud', true);
     initial.bubbles = {
-      N: { text: "Salut partenaire ! Prêt ?", type: 'chat', id: Date.now() }
+      N: { text: `Salut partenaire ! (Niveau ${BOT_DIFFICULTIES[botDifficulty]?.label})`, type: 'chat', id: Date.now() }
     };
     setMode('LOCAL');
     setGameState(initial);
   };
 
   const claimSeatInLobby = async (targetSeat) => {
+    soundEngine.playClick();
     if (!gameState) return;
     const currentSeat = SEATS.find(s => gameState.seats[s].uid === myUid);
     const targetOccupant = gameState.seats[targetSeat];
@@ -1388,12 +1847,14 @@ export default function App() {
   }, [gameState?.highestBid, gameState?.status]);
 
   const startNewDeal = async (stateSnapshot, nextDealerSeat) => {
+    soundEngine.playClick();
     const newHands = createAndDealDeck(nextDealerSeat);
     const firstBidder = getNextSeat(nextDealerSeat);
 
     const nextState = {
       ...stateSnapshot,
       status: 'BIDDING',
+      botDifficulty: stateSnapshot.botDifficulty || botDifficulty,
       dealer: nextDealerSeat,
       currentTurn: firstBidder,
       hands: newHands,
@@ -1429,6 +1890,7 @@ export default function App() {
   const handleBidAction = async (seat, action) => {
     if (!gameState || gameState.status !== 'BIDDING' || gameState.currentTurn !== seat) return;
 
+    soundEngine.playBidSound(action.type);
     const newState = JSON.parse(JSON.stringify(gameState));
     const nextTurn = getNextSeat(seat);
 
@@ -1527,6 +1989,8 @@ export default function App() {
     const legalIds = getPlayableCardIds(hand, gameState.currentTrick, gameState.trumpSuit, seat);
     if (!legalIds.includes(card.id)) return;
 
+    soundEngine.playCardSlap();
+
     const newState = JSON.parse(JSON.stringify(gameState));
     newState.hands[seat] = newState.hands[seat].filter(c => c.id !== card.id);
     newState.currentTrick.push({ seat, card });
@@ -1536,6 +2000,7 @@ export default function App() {
       card.suit === newState.trumpSuit &&
       (card.rank === 'K' || card.rank === 'Q')
     ) {
+      soundEngine.playBidSound('BID');
       if (newState.beloteStep === 0) {
         newState.beloteStep = 1;
         newState.bubbles[seat] = { text: 'Belote ! 👑', type: 'belote', id: Date.now() };
@@ -1561,6 +2026,7 @@ export default function App() {
   };
 
   const collectFinishedTrick = async (stateSnapshot) => {
+    soundEngine.playTrickSweep();
     const newState = JSON.parse(JSON.stringify(stateSnapshot));
     const winnerSeat = newState.trickWinner;
     const winnerTeam = getTeam(winnerSeat);
@@ -1631,6 +2097,8 @@ export default function App() {
       isContractMade = attackTotalWithBelote >= contract.value;
     }
 
+    soundEngine.playRoundEnd(isContractMade);
+
     let deltaNS = 0;
     let deltaEW = 0;
 
@@ -1685,6 +2153,7 @@ export default function App() {
   };
 
   const sendQuickChat = async (text) => {
+    soundEngine.playClick();
     if (!gameState) return;
     setShowChatMenu(false);
     const newState = JSON.parse(JSON.stringify(gameState));
@@ -1730,42 +2199,93 @@ export default function App() {
   }, [gameState, mode, myUid]);
 
   // ==========================================
-  // 7. RENDU : ÉCRAN D'ACCUEIL & SALON
+  // 7. RENDU : ÉCRAN D'ACCUEIL & SALON (PLEIN ÉCRAN SANS BORDURE NOIRE)
   // ==========================================
 
   if (mode === 'HOME') {
     return (
-      <div className="min-h-screen w-full bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-emerald-800 via-emerald-950 to-stone-950 text-white flex flex-col items-center justify-center p-4 select-none">
-        <div className="max-w-4xl w-full flex flex-col items-center text-center mb-8">
-          <div className="relative mb-3">
+      <div className="fixed inset-0 w-screen h-screen overflow-y-auto bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-emerald-800 via-emerald-950 to-emerald-950 text-white flex flex-col items-center justify-center p-4 sm:p-6 select-none">
+        {/* Barre d'actions rapides en haut à droite (Paramètres & Plein écran) */}
+        <div className="fixed top-4 right-4 z-40 flex items-center gap-2">
+          <button
+            onClick={() => toggleFullscreen()}
+            className="px-3.5 py-2.5 rounded-2xl bg-stone-900/90 hover:bg-stone-800 border border-amber-500/40 text-amber-300 font-bold text-xs flex items-center gap-2 shadow-xl transition cursor-pointer"
+            title={isFullscreen ? 'Passer en mode Fenêtré' : 'Passer en Plein Écran'}
+          >
+            {isFullscreen ? <Minimize className="w-4 h-4" /> : <Maximize className="w-4 h-4" />}
+            <span className="hidden sm:inline">{isFullscreen ? 'Fenêtré' : 'Plein Écran'}</span>
+          </button>
+
+          <button
+            onClick={() => { soundEngine.playClick(); setShowSettingsModal(true); }}
+            className="px-3.5 py-2.5 rounded-2xl bg-stone-900/90 hover:bg-stone-800 border border-amber-500/40 text-white font-bold text-xs flex items-center gap-2 shadow-xl transition cursor-pointer"
+          >
+            <Settings className="w-4 h-4 text-amber-400" />
+            <span>Paramètres</span>
+          </button>
+        </div>
+
+        <div className="max-w-5xl w-full flex flex-col items-center text-center mb-6">
+          <div className="relative mb-2">
             <div className="flex items-center justify-center gap-2 bg-gradient-to-b from-amber-300 to-amber-600 text-stone-950 px-5 py-1.5 rounded-full font-black text-xs uppercase tracking-widest shadow-lg border border-amber-200">
               <Crown className="w-4 h-4 fill-stone-950" /> Édition Officielle Multijoueur
             </div>
           </div>
 
-          <h1 className="text-5xl sm:text-6xl font-black tracking-tight text-transparent bg-clip-text bg-gradient-to-b from-white via-amber-100 to-amber-400 drop-shadow-[0_4px_12px_rgba(0,0,0,0.6)]">
+          <h1 className="text-4xl sm:text-6xl font-black tracking-tight text-transparent bg-clip-text bg-gradient-to-b from-white via-amber-100 to-amber-400 drop-shadow-[0_4px_12px_rgba(0,0,0,0.6)]">
             CONTRÉE ROYALE
           </h1>
-          <p className="text-emerald-200/90 mt-2 text-sm sm:text-base max-w-md font-medium">
-            Jouez à la vraie Belote Contrée avec votre super pote en équipe Nord-Sud ou contre nos bots maîtres !
+          <p className="text-emerald-200/90 mt-1.5 text-sm sm:text-base max-w-lg font-medium">
+            Jouez à la vraie Belote Contrée avec votre super pote en équipe Nord-Sud ou contre nos bots !
           </p>
         </div>
 
-        <div className="max-w-3xl w-full bg-stone-900/80 backdrop-blur-md border-2 border-amber-500/40 rounded-3xl p-6 sm:p-8 shadow-[0_20px_50px_rgba(0,0,0,0.7)]">
-          <div className="mb-8">
-            <label className="block text-xs font-bold uppercase tracking-wider text-amber-400 mb-2">
-              Votre Pseudo autour de la table
-            </label>
-            <div className="flex items-center gap-3 bg-stone-950/90 border border-stone-700 rounded-2xl px-4 py-3 focus-within:border-amber-400 transition">
-              <Users className="w-5 h-5 text-amber-400 shrink-0" />
-              <input
-                type="text"
-                maxLength={16}
-                value={pseudo}
-                onChange={(e) => setPseudo(e.target.value)}
-                placeholder="Ex: Alex, Thomas..."
-                className="bg-transparent w-full text-white font-bold text-lg focus:outline-none"
-              />
+        <div className="max-w-4xl w-full bg-stone-900/85 backdrop-blur-md border-2 border-amber-500/40 rounded-3xl p-5 sm:p-7 shadow-[0_20px_50px_rgba(0,0,0,0.7)]">
+          {/* Ligne Pseudo + Choix Difficulté des Bots */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+            <div>
+              <label className="block text-xs font-bold uppercase tracking-wider text-amber-400 mb-2">
+                Votre Pseudo autour de la table
+              </label>
+              <div className="flex items-center gap-3 bg-stone-950/90 border border-stone-700 rounded-2xl px-4 py-2.5 focus-within:border-amber-400 transition">
+                <Users className="w-5 h-5 text-amber-400 shrink-0" />
+                <input
+                  type="text"
+                  maxLength={16}
+                  value={pseudo}
+                  onChange={(e) => setPseudo(e.target.value)}
+                  placeholder="Ex: Alex, Thomas..."
+                  className="bg-transparent w-full text-white font-bold text-base focus:outline-none"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold uppercase tracking-wider text-amber-400 mb-2">
+                Niveau de difficulté des Bots
+              </label>
+              <div className="grid grid-cols-3 gap-1.5 bg-stone-950/90 p-1.5 rounded-2xl border border-stone-700">
+                {Object.values(BOT_DIFFICULTIES).map((lvl) => {
+                  const active = botDifficulty === lvl.id;
+                  return (
+                    <button
+                      key={lvl.id}
+                      type="button"
+                      onClick={() => { soundEngine.playClick(); setBotDifficulty(lvl.id); }}
+                      className={`py-2 px-2 rounded-xl font-black text-xs transition cursor-pointer flex flex-col items-center justify-center ${
+                        active
+                          ? 'bg-gradient-to-r from-amber-400 to-amber-500 text-stone-950 shadow-md'
+                          : 'text-stone-300 hover:bg-stone-800'
+                      }`}
+                    >
+                      <span>{lvl.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="text-[11px] text-emerald-300/90 font-medium mt-1 px-1">
+                {BOT_DIFFICULTIES[botDifficulty]?.shortDesc}
+              </div>
             </div>
           </div>
 
@@ -1792,7 +2312,6 @@ export default function App() {
               </div>
 
               <div className="space-y-3">
-                {/* Section spéciale Version .EXE (Code rapide à 5 lettres via PeerJS) */}
                 <div className="pb-3 border-b border-stone-700/80 space-y-2">
                   <div className="text-[11px] font-black uppercase tracking-wider text-amber-300 flex items-center justify-between">
                     <span>⚡ Salon Rapide (Code 5 lettres)</span>
@@ -1842,17 +2361,19 @@ export default function App() {
             <div className="bg-gradient-to-b from-stone-800/70 to-stone-900/90 border border-stone-700 rounded-2xl p-5 flex flex-col justify-between">
               <div>
                 <div className="flex items-center justify-between mb-3">
-                  <span className="bg-amber-500/20 text-amber-300 border border-amber-500/30 text-xs font-bold px-3 py-1 rounded-full">
-                    Accès Instantané
+                  <span className={`text-xs font-bold px-3 py-1 rounded-full border ${BOT_DIFFICULTIES[botDifficulty]?.badgeColor}`}>
+                    Mode : {BOT_DIFFICULTIES[botDifficulty]?.label}
                   </span>
                   <Bot className="w-6 h-6 text-amber-400" />
                 </div>
-                <h2 className="text-xl font-extrabold text-white mb-1">Partie Solo vs Bots Pro</h2>
-                <p className="text-xs text-stone-300 mb-5 leading-relaxed">
-                  Lancez immédiatement une table complète avec nos 3 bots experts (César, Fanny et Honoré).
+                <h2 className="text-xl font-extrabold text-white mb-1">
+                  Partie Solo vs Bots ({BOT_DIFFICULTIES[botDifficulty]?.label})
+                </h2>
+                <p className="text-xs text-stone-300 mb-4 leading-relaxed">
+                  Lancez immédiatement une table complète avec nos 3 bots (César, Fanny et Honoré) réglés sur le niveau <strong>{BOT_DIFFICULTIES[botDifficulty]?.label}</strong>.
                 </p>
 
-                <ul className="text-xs text-stone-300 space-y-2 mb-6">
+                <ul className="text-xs text-stone-300 space-y-1.5 mb-5">
                   <li className="flex items-center gap-2">
                     <Check className="w-4 h-4 text-emerald-400" /> Enchères 80 à 160, Capot, Contre & Surcontre
                   </li>
@@ -1860,7 +2381,7 @@ export default function App() {
                     <Check className="w-4 h-4 text-emerald-400" /> Belote / Rebelote (+20 pts) & 10 de Der
                   </li>
                   <li className="flex items-center gap-2">
-                    <Check className="w-4 h-4 text-emerald-400" /> Tri automatique des atouts à gauche
+                    <Check className="w-4 h-4 text-emerald-400" /> Effets sonores & Plein Écran ajustable
                   </li>
                 </ul>
               </div>
@@ -1873,19 +2394,40 @@ export default function App() {
                   <Play className="w-5 h-5 fill-white" />
                   Jouer Maintenant
                 </button>
-                <button
-                  onClick={() => setShowRulesModal(true)}
-                  className="w-full py-2.5 px-4 rounded-xl bg-stone-800 hover:bg-stone-700 text-stone-200 font-semibold text-xs flex items-center justify-center gap-1.5 transition cursor-pointer"
-                >
-                  <HelpCircle className="w-4 h-4 text-amber-400" />
-                  Rappel des Règles de la Contrée
-                </button>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    onClick={() => { soundEngine.playClick(); setShowRulesModal(true); }}
+                    className="w-full py-2.5 px-3 rounded-xl bg-stone-800 hover:bg-stone-700 text-stone-200 font-semibold text-xs flex items-center justify-center gap-1.5 transition cursor-pointer"
+                  >
+                    <HelpCircle className="w-4 h-4 text-amber-400" />
+                    Règles du jeu
+                  </button>
+                  <button
+                    onClick={() => { soundEngine.playClick(); setShowSettingsModal(true); }}
+                    className="w-full py-2.5 px-3 rounded-xl bg-stone-800 hover:bg-stone-700 text-stone-200 font-semibold text-xs flex items-center justify-center gap-1.5 transition cursor-pointer"
+                  >
+                    <Sliders className="w-4 h-4 text-emerald-400" />
+                    Sons & Écran
+                  </button>
+                </div>
               </div>
             </div>
           </div>
         </div>
 
         {showRulesModal && <RulesModal onClose={() => setShowRulesModal(false)} />}
+
+        {showSettingsModal && (
+          <SettingsModal
+            onClose={() => setShowSettingsModal(false)}
+            isFullscreen={isFullscreen}
+            onToggleFullscreen={toggleFullscreen}
+            audioSettings={audioSettings}
+            setAudioSettings={setAudioSettings}
+            botDifficulty={botDifficulty}
+            setBotDifficulty={setBotDifficulty}
+          />
+        )}
 
         {showDesktopModal && (
           <DesktopExportModal
@@ -1903,7 +2445,7 @@ export default function App() {
   // ==========================================
   if (mode === 'WEBRTC_SETUP') {
     return (
-      <div className="min-h-screen w-full bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-emerald-800 via-emerald-950 to-stone-950 text-white flex flex-col items-center justify-center p-4 select-none">
+      <div className="fixed inset-0 w-screen h-screen bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-emerald-800 via-emerald-950 to-emerald-950 text-white flex flex-col items-center justify-center p-4 select-none">
         <div className="max-w-xl w-full bg-stone-900/95 border-2 border-amber-500/50 rounded-3xl p-6 sm:p-8 shadow-2xl space-y-6">
           <div className="flex items-center justify-between border-b border-stone-800 pb-4">
             <div>
@@ -2041,7 +2583,7 @@ export default function App() {
     };
 
     return (
-      <div className="min-h-screen w-full bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-emerald-800 via-emerald-950 to-stone-950 text-white flex flex-col items-center justify-center p-4 select-none">
+      <div className="fixed inset-0 w-screen h-screen overflow-y-auto bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-emerald-800 via-emerald-950 to-emerald-950 text-white flex flex-col items-center justify-center p-4 select-none">
         <div className="max-w-3xl w-full bg-stone-900/90 border-2 border-amber-500/40 rounded-3xl p-6 sm:p-8 shadow-2xl">
           <div className="flex flex-col sm:flex-row items-center justify-between gap-4 border-b border-stone-800 pb-6 mb-6">
             <div>
@@ -2052,20 +2594,57 @@ export default function App() {
               </p>
             </div>
 
-            <div className="bg-stone-950 border-2 border-amber-400/60 rounded-2xl px-4 py-2.5 flex items-center gap-3">
-              <div>
-                <div className="text-[10px] uppercase font-bold text-stone-400">Code du salon</div>
-                <div className="text-2xl font-mono font-black tracking-widest text-amber-400">{roomCode}</div>
+            <div className="flex items-center gap-3">
+              <div className="bg-stone-950 border-2 border-amber-400/60 rounded-2xl px-4 py-2.5 flex items-center gap-3">
+                <div>
+                  <div className="text-[10px] uppercase font-bold text-stone-400">Code du salon</div>
+                  <div className="text-2xl font-mono font-black tracking-widest text-amber-400">{roomCode}</div>
+                </div>
+                <button
+                  onClick={copyRoomCode}
+                  className="p-2.5 bg-amber-500 hover:bg-amber-400 text-stone-950 rounded-xl font-bold transition cursor-pointer"
+                  title="Copier le code"
+                >
+                  {copiedCode ? <Check className="w-5 h-5" /> : <Copy className="w-5 h-5" />}
+                </button>
               </div>
               <button
-                onClick={copyRoomCode}
-                className="p-2.5 bg-amber-500 hover:bg-amber-400 text-stone-950 rounded-xl font-bold transition cursor-pointer"
-                title="Copier le code"
+                onClick={() => { soundEngine.playClick(); setShowSettingsModal(true); }}
+                className="p-3 rounded-2xl bg-stone-800 hover:bg-stone-700 border border-stone-600 text-amber-400 cursor-pointer"
+                title="Paramètres"
               >
-                {copiedCode ? <Check className="w-5 h-5" /> : <Copy className="w-5 h-5" />}
+                <Settings className="w-5 h-5" />
               </button>
             </div>
           </div>
+
+          {isHost && (
+            <div className="mb-4 bg-stone-950/90 border border-stone-800 rounded-2xl p-3 flex flex-col sm:flex-row items-center justify-between gap-3">
+              <span className="text-xs font-bold text-amber-300 flex items-center gap-2">
+                <Bot className="w-4 h-4" /> Difficulté des Bots qui complètent la table :
+              </span>
+              <div className="flex gap-1.5">
+                {Object.values(BOT_DIFFICULTIES).map((lvl) => {
+                  const active = (gameState.botDifficulty || botDifficulty) === lvl.id;
+                  return (
+                    <button
+                      key={lvl.id}
+                      onClick={() => {
+                        soundEngine.playClick();
+                        setBotDifficulty(lvl.id);
+                        updateGameState({ ...gameState, botDifficulty: lvl.id });
+                      }}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-black transition cursor-pointer ${
+                        active ? 'bg-amber-400 text-stone-950' : 'bg-stone-800 text-stone-300 hover:bg-stone-700'
+                      }`}
+                    >
+                      {lvl.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
 
           <div className="grid grid-cols-3 gap-4 items-center my-6 max-w-xl mx-auto">
             <div />
@@ -2137,6 +2716,18 @@ export default function App() {
             )}
           </div>
         </div>
+
+        {showSettingsModal && (
+          <SettingsModal
+            onClose={() => setShowSettingsModal(false)}
+            isFullscreen={isFullscreen}
+            onToggleFullscreen={toggleFullscreen}
+            audioSettings={audioSettings}
+            setAudioSettings={setAudioSettings}
+            botDifficulty={botDifficulty}
+            setBotDifficulty={setBotDifficulty}
+          />
+        )}
       </div>
     );
   }
@@ -2144,7 +2735,7 @@ export default function App() {
   if (!gameState) return null;
 
   // ==========================================
-  // 9. RENDU : TABLE DE JEU STYLE "BELOTE.COM"
+  // 9. RENDU : TABLE DE JEU PLEIN ÉCRAN (SANS BORDURES NOIRES)
   // ==========================================
   const isMyTurn = gameState.currentTurn === mySeat;
   const playableIds = gameState.status === 'PLAYING' && isMyTurn
@@ -2163,8 +2754,10 @@ export default function App() {
   const theirLiveRoundPoints = (myTeam === 'NS' ? gameState.roundPoints.EW : gameState.roundPoints.NS) +
     (gameState.beloteTeam && gameState.beloteTeam !== myTeam && gameState.beloteStep === 2 ? 20 : 0);
 
+  const activeDifficultyObj = BOT_DIFFICULTIES[gameState.botDifficulty || botDifficulty] || BOT_DIFFICULTIES.PRO;
+
   return (
-    <div className="h-screen w-full overflow-hidden bg-stone-950 flex flex-col justify-between select-none relative font-sans">
+    <div className="fixed inset-0 w-screen h-screen overflow-hidden bg-gradient-to-b from-emerald-950 via-emerald-900 to-emerald-950 flex flex-col justify-between select-none font-sans">
       <style>{`
         @keyframes cardDropBottom {
           0% { opacity: 0; transform: translateY(75px) scale(0.75); }
@@ -2195,10 +2788,10 @@ export default function App() {
       `}</style>
       
       {/* BARRE SUPÉRIEURE */}
-      <header className="relative z-30 bg-gradient-to-b from-stone-900 via-stone-900/95 to-stone-900/80 border-b-2 border-amber-600/40 px-3 sm:px-6 py-2 flex items-center justify-between shadow-lg">
+      <header className="relative z-30 bg-gradient-to-b from-stone-900 via-stone-900/95 to-stone-900/85 border-b-2 border-amber-600/40 px-3 sm:px-6 py-2 flex items-center justify-between shadow-lg">
         <div className="flex items-center gap-3">
           <button
-            onClick={() => { cleanupP2P(); setMode('HOME'); }}
+            onClick={() => { soundEngine.playClick(); cleanupP2P(); setMode('HOME'); }}
             className="p-2 rounded-xl bg-stone-800 hover:bg-stone-700 text-stone-300 transition cursor-pointer"
             title="Retour au menu"
           >
@@ -2207,6 +2800,9 @@ export default function App() {
           <div className="hidden sm:block">
             <div className="text-sm font-black tracking-wider text-amber-400 flex items-center gap-1.5">
               <Crown className="w-4 h-4" /> CONTRÉE ROYALE
+              <span className={`ml-1 text-[10px] px-2 py-0.5 rounded-full border ${activeDifficultyObj.badgeColor}`}>
+                Bots : {activeDifficultyObj.label}
+              </span>
             </div>
             {mode === 'ONLINE' && (
               <div className="text-[11px] text-emerald-400 font-mono flex items-center gap-1">
@@ -2271,19 +2867,35 @@ export default function App() {
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1.5 sm:gap-2">
           <button
-            onClick={() => setShowLastTrickModal(true)}
+            onClick={() => { soundEngine.playClick(); setShowLastTrickModal(true); }}
             disabled={!gameState.lastTrick || gameState.lastTrick.length === 0}
             className="px-2.5 py-2 rounded-xl bg-stone-800 hover:bg-stone-700 disabled:opacity-40 text-amber-300 font-bold text-xs flex items-center gap-1.5 border border-stone-700 transition cursor-pointer"
             title="Agrandir le dernier pli"
           >
             <History className="w-4 h-4" />
-            <span className="hidden md:inline">Dernier Pli</span>
+            <span className="hidden lg:inline">Dernier Pli</span>
           </button>
 
           <button
-            onClick={() => setShowRulesModal(true)}
+            onClick={() => toggleFullscreen()}
+            className="p-2 rounded-xl bg-stone-800 hover:bg-stone-700 text-amber-300 border border-stone-700 transition cursor-pointer"
+            title={isFullscreen ? 'Mode Fenêtré' : 'Mode Plein Écran'}
+          >
+            {isFullscreen ? <Minimize className="w-4 h-4" /> : <Maximize className="w-4 h-4" />}
+          </button>
+
+          <button
+            onClick={() => { soundEngine.playClick(); setShowSettingsModal(true); }}
+            className="p-2 rounded-xl bg-stone-800 hover:bg-stone-700 text-white border border-stone-700 transition cursor-pointer"
+            title="Paramètres (Sons, Écran, Difficulté)"
+          >
+            <Settings className="w-4 h-4 text-amber-400" />
+          </button>
+
+          <button
+            onClick={() => { soundEngine.playClick(); setShowRulesModal(true); }}
             className="p-2 rounded-xl bg-stone-800 hover:bg-stone-700 text-stone-300 border border-stone-700 transition cursor-pointer"
             title="Règles et valeur des cartes"
           >
@@ -2292,15 +2904,15 @@ export default function App() {
         </div>
       </header>
 
-      {/* ZONE CENTRALE : TAPIS VERT */}
-      <main className="relative flex-1 w-full flex items-center justify-center p-2 sm:p-4 overflow-hidden bg-stone-950">
-        <div className="relative w-full h-full max-w-6xl rounded-[36px] sm:rounded-[56px] border-[10px] sm:border-[16px] border-amber-950 shadow-[inset_0_0_80px_rgba(0,0,0,0.85),0_20px_50px_rgba(0,0,0,0.9)] bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-emerald-600 via-emerald-800 to-emerald-950 flex flex-col justify-between p-2 sm:p-4">
+      {/* ZONE CENTRALE : TAPIS VERT OCCUPANT TOUTE LA LARGEUR */}
+      <main className="relative flex-1 w-full h-full flex items-center justify-center p-1.5 sm:p-3 overflow-hidden">
+        <div className="relative w-full h-full rounded-[28px] sm:rounded-[44px] border-[8px] sm:border-[14px] border-amber-950 shadow-[inset_0_0_90px_rgba(0,0,0,0.85),0_12px_40px_rgba(0,0,0,0.8)] bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-emerald-600 via-emerald-800 to-emerald-950 flex flex-col justify-between p-2 sm:p-5">
           
-          <div className="absolute inset-3 sm:inset-5 rounded-[26px] sm:rounded-[40px] border border-amber-400/25 pointer-events-none" />
+          <div className="absolute inset-2.5 sm:inset-4 rounded-[20px] sm:rounded-[32px] border border-amber-400/25 pointer-events-none" />
 
           {/* WIDGET EN HAUT À GAUCHE DU TAPIS */}
           {(gameState.status === 'PLAYING' || gameState.status === 'TRICK_END') && (
-            <div className="absolute top-5 left-5 sm:top-7 sm:left-8 z-30 bg-stone-950/90 backdrop-blur-md border-2 border-amber-500/50 rounded-2xl px-4 py-2.5 shadow-2xl hidden sm:flex flex-col gap-2 min-w-[210px]">
+            <div className="absolute top-4 left-4 sm:top-6 sm:left-7 z-30 bg-stone-950/90 backdrop-blur-md border-2 border-amber-500/50 rounded-2xl px-4 py-2.5 shadow-2xl hidden sm:flex flex-col gap-2 min-w-[210px]">
               {gameState.contract && (
                 <div className="flex items-center justify-between gap-3 border-b border-stone-800 pb-2">
                   <div>
@@ -2353,8 +2965,8 @@ export default function App() {
           {/* WIDGET EN HAUT À DROITE DU TAPIS : DERNIER PLI */}
           {gameState.lastTrick && gameState.lastTrick.length > 0 && (
             <div
-              onClick={() => setShowLastTrickModal(true)}
-              className="absolute top-5 right-5 sm:top-7 sm:right-8 z-30 bg-stone-950/85 hover:bg-stone-900 backdrop-blur-md border border-amber-500/40 rounded-2xl px-3 py-2 shadow-xl cursor-pointer transition group hidden sm:flex flex-col items-center"
+              onClick={() => { soundEngine.playClick(); setShowLastTrickModal(true); }}
+              className="absolute top-4 right-4 sm:top-6 sm:right-7 z-30 bg-stone-950/85 hover:bg-stone-900 backdrop-blur-md border border-amber-500/40 rounded-2xl px-3 py-2 shadow-xl cursor-pointer transition group hidden sm:flex flex-col items-center"
               title="Cliquer pour agrandir le dernier pli"
             >
               <div className="text-[10px] font-black uppercase tracking-wider text-amber-400 mb-1 flex items-center gap-1">
@@ -2391,7 +3003,7 @@ export default function App() {
           </div>
 
           {/* RANGÉE MILIEU */}
-          <div className="relative z-20 flex-1 min-h-0 flex items-center justify-between w-full my-1">
+          <div className="relative z-20 flex-1 min-h-0 flex items-center justify-between w-full my-1 px-2 sm:px-6">
             
             <div className="flex flex-col items-center gap-1.5">
               <PlayerAvatarBadge
@@ -2502,7 +3114,7 @@ export default function App() {
 
               <div className="relative">
                 <button
-                  onClick={() => setShowChatMenu(!showChatMenu)}
+                  onClick={() => { soundEngine.playClick(); setShowChatMenu(!showChatMenu); }}
                   className="p-2.5 rounded-full bg-amber-500 hover:bg-amber-400 text-stone-950 shadow-lg transition cursor-pointer"
                   title="Envoyer un message rapide"
                 >
@@ -2668,13 +3280,228 @@ export default function App() {
       )}
 
       {showRulesModal && <RulesModal onClose={() => setShowRulesModal(false)} />}
+
+      {showSettingsModal && (
+        <SettingsModal
+          onClose={() => setShowSettingsModal(false)}
+          isFullscreen={isFullscreen}
+          onToggleFullscreen={toggleFullscreen}
+          audioSettings={audioSettings}
+          setAudioSettings={setAudioSettings}
+          botDifficulty={botDifficulty}
+          setBotDifficulty={setBotDifficulty}
+        />
+      )}
     </div>
   );
 }
 
 // ==========================================
-// 11. SOUS-COMPOSANTS D'INTERFACE
+// 11. SOUS-COMPOSANTS D'INTERFACE & SETTINGS
 // ==========================================
+
+const SettingsModal = ({
+  onClose,
+  isFullscreen,
+  onToggleFullscreen,
+  audioSettings,
+  setAudioSettings,
+  botDifficulty,
+  setBotDifficulty
+}) => {
+  const handleSliderChange = (key, value) => {
+    setAudioSettings((prev) => ({
+      ...prev,
+      [key]: Number(value)
+    }));
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4" onClick={onClose}>
+      <div
+        className="bg-stone-900 border-2 border-amber-500/60 rounded-3xl p-6 max-w-lg w-full text-white shadow-2xl space-y-6 max-h-[90vh] overflow-y-auto"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between border-b border-stone-800 pb-4">
+          <h3 className="text-xl font-black text-amber-400 flex items-center gap-2">
+            <Settings className="w-6 h-6" /> Paramètres de l'Application
+          </h3>
+          <button onClick={onClose} className="text-stone-400 hover:text-white font-bold text-lg cursor-pointer">
+            ✕
+          </button>
+        </div>
+
+        {/* SECTION 1 : AFFICHAGE PLEIN ÉCRAN / FENÊTRÉ */}
+        <div className="bg-stone-950/90 border border-stone-800 rounded-2xl p-4 space-y-3">
+          <div className="text-xs font-black uppercase tracking-wider text-amber-400 flex items-center gap-2">
+            <Monitor className="w-4 h-4" /> Mode d'Affichage (Sans bordures noires)
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <button
+              type="button"
+              onClick={() => onToggleFullscreen(true)}
+              className={`py-3 px-4 rounded-xl font-black text-xs flex items-center justify-center gap-2 border transition cursor-pointer ${
+                isFullscreen
+                  ? 'bg-amber-400 text-stone-950 border-white shadow-lg'
+                  : 'bg-stone-900 text-stone-300 border-stone-700 hover:bg-stone-800'
+              }`}
+            >
+              <Maximize className="w-4 h-4" /> Plein Écran
+            </button>
+            <button
+              type="button"
+              onClick={() => onToggleFullscreen(false)}
+              className={`py-3 px-4 rounded-xl font-black text-xs flex items-center justify-center gap-2 border transition cursor-pointer ${
+                !isFullscreen
+                  ? 'bg-amber-400 text-stone-950 border-white shadow-lg'
+                  : 'bg-stone-900 text-stone-300 border-stone-700 hover:bg-stone-800'
+              }`}
+            >
+              <Minimize className="w-4 h-4" /> Mode Fenêtré
+            </button>
+          </div>
+        </div>
+
+        {/* SECTION 2 : VOLUMES AUDIO */}
+        <div className="bg-stone-950/90 border border-stone-800 rounded-2xl p-4 space-y-4">
+          <div className="flex items-center justify-between">
+            <div className="text-xs font-black uppercase tracking-wider text-emerald-400 flex items-center gap-2">
+              {audioSettings.muted ? <VolumeX className="w-4 h-4 text-rose-400" /> : <Volume2 className="w-4 h-4" />}
+              Volumes Sonores du Jeu
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                const nextMuted = !audioSettings.muted;
+                setAudioSettings((prev) => ({ ...prev, muted: nextMuted }));
+              }}
+              className={`px-3 py-1 rounded-lg text-xs font-black cursor-pointer transition ${
+                audioSettings.muted
+                  ? 'bg-rose-600 text-white'
+                  : 'bg-stone-800 hover:bg-stone-700 text-stone-300'
+              }`}
+            >
+              {audioSettings.muted ? 'Son Coupé (Activer)' : 'Couper tout le son'}
+            </button>
+          </div>
+
+          <div className="space-y-3">
+            <div>
+              <div className="flex justify-between text-xs font-bold mb-1">
+                <span className="text-stone-300">Volume Général</span>
+                <span className="text-amber-400">{audioSettings.master}%</span>
+              </div>
+              <input
+                type="range"
+                min="0"
+                max="100"
+                value={audioSettings.master}
+                onChange={(e) => handleSliderChange('master', e.target.value)}
+                onMouseUp={() => soundEngine.playClick()}
+                className="w-full accent-amber-400 cursor-pointer"
+              />
+            </div>
+
+            <div>
+              <div className="flex justify-between text-xs font-bold mb-1">
+                <span className="text-stone-300">Bruitages des Cartes & Plis</span>
+                <span className="text-emerald-400">{audioSettings.cards}%</span>
+              </div>
+              <input
+                type="range"
+                min="0"
+                max="100"
+                value={audioSettings.cards}
+                onChange={(e) => handleSliderChange('cards', e.target.value)}
+                onMouseUp={() => soundEngine.playCardSlap()}
+                className="w-full accent-emerald-400 cursor-pointer"
+              />
+            </div>
+
+            <div>
+              <div className="flex justify-between text-xs font-bold mb-1">
+                <span className="text-stone-300">Annonces, Contres & Fin de Manche</span>
+                <span className="text-amber-300">{audioSettings.announces}%</span>
+              </div>
+              <input
+                type="range"
+                min="0"
+                max="100"
+                value={audioSettings.announces}
+                onChange={(e) => handleSliderChange('announces', e.target.value)}
+                onMouseUp={() => soundEngine.playBidSound('BID')}
+                className="w-full accent-amber-400 cursor-pointer"
+              />
+            </div>
+
+            <div>
+              <div className="flex justify-between text-xs font-bold mb-1">
+                <span className="text-stone-300">Sons des Boutons & Interface</span>
+                <span className="text-sky-300">{audioSettings.ui}%</span>
+              </div>
+              <input
+                type="range"
+                min="0"
+                max="100"
+                value={audioSettings.ui}
+                onChange={(e) => handleSliderChange('ui', e.target.value)}
+                onMouseUp={() => soundEngine.playClick()}
+                className="w-full accent-sky-400 cursor-pointer"
+              />
+            </div>
+          </div>
+        </div>
+
+        {/* SECTION 3 : NIVEAU DE DIFFICULTÉ DES BOTS */}
+        <div className="bg-stone-950/90 border border-stone-800 rounded-2xl p-4 space-y-3">
+          <div className="text-xs font-black uppercase tracking-wider text-amber-400 flex items-center gap-2">
+            <Bot className="w-4 h-4" /> Niveau de Difficulté des Bots
+          </div>
+          <div className="grid grid-cols-1 gap-2">
+            {Object.values(BOT_DIFFICULTIES).map((lvl) => {
+              const active = botDifficulty === lvl.id;
+              return (
+                <button
+                  key={lvl.id}
+                  type="button"
+                  onClick={() => {
+                    soundEngine.playClick();
+                    setBotDifficulty(lvl.id);
+                  }}
+                  className={`p-3 rounded-xl border text-left transition cursor-pointer flex items-center justify-between ${
+                    active
+                      ? 'bg-amber-500/15 border-amber-400 text-white'
+                      : 'bg-stone-900/80 border-stone-800 text-stone-300 hover:bg-stone-800'
+                  }`}
+                >
+                  <div>
+                    <div className="font-black text-sm flex items-center gap-2">
+                      <span>{lvl.label}</span>
+                      {active && (
+                        <span className="text-[10px] bg-amber-400 text-stone-950 px-2 py-0.5 rounded-full font-black">
+                          Actif
+                        </span>
+                      )}
+                    </div>
+                    <div className="text-xs text-stone-400 mt-0.5">{lvl.shortDesc}</div>
+                  </div>
+                  <div className={`w-4 h-4 rounded-full border-2 ${active ? 'bg-amber-400 border-white' : 'border-stone-600'}`} />
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        <button
+          onClick={() => { soundEngine.playClick(); onClose(); }}
+          className="w-full py-3.5 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-stone-950 font-black text-sm shadow-lg cursor-pointer"
+        >
+          Enregistrer et Fermer
+        </button>
+      </div>
+    </div>
+  );
+};
 
 const PlayerAvatarBadge = ({ seat, player, isTurn, isDealer, isTaker, bubble, relationLabel }) => {
   if (!player) return null;
@@ -2842,7 +3669,7 @@ const BiddingCenterPanel = ({ gameState, isMyTurn, mySeat, selectedBidValue, set
                     <button
                       key={val}
                       disabled={disabled}
-                      onClick={() => setSelectedBidValue(val)}
+                      onClick={() => { soundEngine.playClick(); setSelectedBidValue(val); }}
                       className={`
                         py-1 rounded-lg font-black text-xs transition cursor-pointer
                         ${disabled ? 'bg-stone-950 text-stone-700 cursor-not-allowed' : ''}
@@ -3039,7 +3866,7 @@ const DesktopExportModal = ({ onClose, onDownloadBat, onDownloadHtml }) => {
               </button>
 
               <button
-                onClick={onDownloadHtml}
+                onClick={() => onDownloadHtml}
                 className="w-full py-3 px-3 rounded-xl bg-amber-500 hover:bg-amber-400 text-stone-950 font-black text-xs flex items-center justify-center gap-2 shadow-lg cursor-pointer"
               >
                 <Download className="w-4 h-4 shrink-0" /> 2. Télécharger ContreeRoyale.html

@@ -12,7 +12,8 @@ function createWindow() {
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true
-    }
+    },
+    icon: path.join(__dirname, 'public', 'icon.ico')
   });
 
   win.loadFile(path.join(__dirname, 'dist', 'index.html'));

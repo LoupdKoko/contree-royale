@@ -12,14 +12,19 @@
     "dist.exe":"vite build --base=./ && electron-builder --win portable"
   },
   "build":{
-    "appId": "com.contreeroyale.app",
+    "appId": "com.loup.contreeroyale.app",
     "productName": "ContreeRoyale",
+    "directories": {
+      "output": "dist"
+    },
     "files": [
       "dist/**/*",
-      "electron-main.cjs"
+      "electron-main.cjs",
+      "public/icon.ico"
     ],
     "win": {
-      "target": "portable"
+      "target": "portable",
+      "icon": "public/icon.ico"
     }
   },
 

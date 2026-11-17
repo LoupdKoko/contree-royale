@@ -1,0 +1,31 @@
+@keyframes cardDropBottom {
+  0% { opacity: 0; transform: translateY(75px) scale(0.75); }
+  100% { opacity: 1; transform: translateY(28px) scale(1); }
+}
+
+@keyframes cardDropTop {
+  0% { opacity: 0; transform: translateY(-75px) scale(0.75); }
+  100% { opacity: 1; transform: translateY(-28px) scale(1); }
+}
+
+@keyframes cardDropLeft {
+  0% { opacity: 0; transform: translateX(-85px) rotate(-18deg) scale(0.75); }
+  100% { opacity: 1; transform: translateX(-52px) rotate(-6deg) scale(1); }
+}
+
+@keyframes cardDropRight {
+  0% { opacity: 0; transform: translateX(85px) rotate(18deg) scale(0.75); }
+  100% { opacity: 1; transform: translateX(52px) rotate(6deg) scale(1); }
+}
+
+@keyframes bubblePop {
+  0% { opacity: 0; transform: translateY(8px) scale(0.8); }
+  70% { transform: translateY(-3px) scale(1.05); }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.anim-drop-bottom { animation: cardDropBottom 0.28s cubic-bezier(0.22, 1, 0.36, 1) forwards; }
+.anim-drop-top    { animation: cardDropTop 0.28s cubic-bezier(0.22, 1, 0.36, 1) forwards; }
+.anim-drop-left   { animation: cardDropLeft 0.28s cubic-bezier(0.22, 1, 0.36, 1) forwards; }
+.anim-drop-right  { animation: cardDropRight 0.28s cubic-bezier(0.22, 1, 0.36, 1) forwards; }
+.anim-bubble-pop  { animation: bubblePop 0.25s cubic-bezier(0.22, 1, 0.36, 1) forwards; }

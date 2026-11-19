@@ -229,8 +229,11 @@ export const BiddingCenterPanel = ({ gameState, isMyTurn, mySeat, selectedBidVal
                   : 'bg-stone-900/60 border-stone-800'
               }`}
             >
-              <span className="text-[9px] font-bold text-stone-400 truncate max-w-full leading-tight">
-                {SEAT_NAMES[s]} • {gameState.seats[s]?.name.split(' ')[0]}
+              <span
+                className="text-[9px] font-bold text-stone-400 truncate max-w-full leading-tight"
+                title={gameState.seats[s]?.name}
+              >
+                {SEAT_NAMES[s]} • {gameState.seats[s]?.name}
               </span>
               <div className="mt-0.5 h-5 flex items-center justify-center">
                 {!b ? (
@@ -360,8 +363,8 @@ export const LobbySeatCard = ({ seat, team, teamColor, occupant, isMe, onClaim }
       <span className={`text-[10px] font-extrabold uppercase px-2 py-0.5 rounded-full border mb-1.5 ${teamColor}`}>
         {SEAT_NAMES[seat]} • {team}
       </span>
-      <div className="font-black text-base text-white flex items-center gap-1.5 my-1">
-        {occupant.isBot ? <Bot className="w-4 h-4 text-stone-400" /> : <Users className="w-4 h-4 text-amber-400" />}
+      <div className="font-black text-sm sm:text-base text-white flex items-center justify-center gap-1.5 my-1 leading-tight">
+        {occupant.isBot ? <Bot className="w-4 h-4 text-stone-400 shrink-0" /> : <Users className="w-4 h-4 text-amber-400 shrink-0" />}
         <span>{occupant.name}</span>
       </div>
       {isMe ? (

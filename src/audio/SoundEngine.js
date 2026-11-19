@@ -29,6 +29,10 @@ export class SoundEngine {
     return this.ctx;
   }
 
+  unlock() {
+    this.getContext();
+  }
+
   getGain(category) {
     if (this.settings.muted) return 0;
     const master = (this.settings.master ?? 80) / 100;

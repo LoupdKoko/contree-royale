@@ -16,7 +16,8 @@ import {
   GraduationCap,
   BarChart3,
   RotateCcw,
-  Check
+  Check,
+  Lock
 } from 'lucide-react';
 import {
   BOT_DIFFICULTIES,
@@ -38,6 +39,8 @@ export const SettingsModal = ({
   setAudioSettings,
   botDifficulty,
   setBotDifficulty,
+  isBotDifficultyLocked = false,
+  botDifficultyLockReason = '',
   botSpeed = 'NORMAL',
   setBotSpeed,
   gameVariant = 'CONTREE',
@@ -46,6 +49,8 @@ export const SettingsModal = ({
   setScoringMode,
   targetScore = 1500,
   setTargetScore,
+  isRulesLocked = false,
+  rulesLockReason = '',
   tableTheme = 'EMERALD',
   setTableTheme,
   cardBackTheme = 'ROYAL_BLUE',
@@ -157,8 +162,16 @@ export const SettingsModal = ({
 
         {/* SECTION 2 : BOTS, VITESSE DE JEU & MODE ENTRAÎNEMENT */}
         <div className="bg-stone-950/90 border border-stone-800 rounded-2xl p-4 space-y-4">
-          <div className="text-xs font-black uppercase tracking-wider text-amber-400 flex items-center gap-2">
-            <Bot className="w-4 h-4" /> Intelligence Artificielle, Vitesse & Entraînement
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="text-xs font-black uppercase tracking-wider text-amber-400 flex items-center gap-2">
+              <Bot className="w-4 h-4" /> Intelligence Artificielle, Vitesse & Entraînement
+            </div>
+            {isBotDifficultyLocked && (
+              <span className="text-[10px] font-bold bg-stone-800/90 text-stone-300 border border-stone-700 px-2.5 py-1 rounded-full flex items-center gap-1">
+                <Lock className="w-3 h-3 text-amber-400 shrink-0" />
+                {botDifficultyLockReason || 'Difficulté verrouillée en cours de partie'}
+              </span>
+            )}
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
@@ -168,14 +181,20 @@ export const SettingsModal = ({
                 <button
                   key={lvl.id}
                   type="button"
+                  disabled={isBotDifficultyLocked}
                   onClick={() => {
+                    if (isBotDifficultyLocked) return;
                     soundEngine.playClick();
                     setBotDifficulty(lvl.id);
                   }}
-                  className={`p-2.5 rounded-xl border text-left transition cursor-pointer ${
-                    active
-                      ? 'bg-amber-500/15 border-amber-400 text-white'
-                      : 'bg-stone-900/80 border-stone-800 text-stone-300 hover:bg-stone-800'
+                  className={`p-2.5 rounded-xl border text-left transition ${
+                    isBotDifficultyLocked
+                      ? active
+                        ? 'bg-amber-500/15 border-amber-400/70 text-white opacity-85 cursor-not-allowed'
+                        : 'bg-stone-900/50 border-stone-800/70 text-stone-500 opacity-50 cursor-not-allowed'
+                      : active
+                      ? 'bg-amber-500/15 border-amber-400 text-white cursor-pointer'
+                      : 'bg-stone-900/80 border-stone-800 text-stone-300 hover:bg-stone-800 cursor-pointer'
                   }`}
                 >
                   <div className="font-black text-xs flex items-center justify-between">
@@ -252,8 +271,16 @@ export const SettingsModal = ({
         {/* SECTION 3 : RÈGLES DE JEU, COMPTAGE & SCORE CIBLE */}
         {(setGameVariant || setScoringMode || setTargetScore) && (
           <div className="bg-stone-950/90 border border-stone-800 rounded-2xl p-4 space-y-4">
-            <div className="text-xs font-black uppercase tracking-wider text-amber-400 flex items-center gap-2">
-              <Trophy className="w-4 h-4" /> Variantes de Règles & Comptage
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="text-xs font-black uppercase tracking-wider text-amber-400 flex items-center gap-2">
+                <Trophy className="w-4 h-4" /> Variantes de Règles & Comptage
+              </div>
+              {isRulesLocked && (
+                <span className="text-[10px] font-bold bg-stone-800/90 text-stone-300 border border-stone-700 px-2.5 py-1 rounded-full flex items-center gap-1">
+                  <Lock className="w-3 h-3 text-amber-400 shrink-0" />
+                  {rulesLockReason || 'Règles verrouillées en cours de partie'}
+                </span>
+              )}
             </div>
 
             {setGameVariant && (
@@ -268,11 +295,20 @@ export const SettingsModal = ({
                       <button
                         key={v.id}
                         type="button"
-                        onClick={() => { soundEngine.playClick(); setGameVariant(v.id); }}
-                        className={`p-2.5 rounded-xl border text-left transition cursor-pointer ${
-                          active
-                            ? 'bg-amber-500/15 border-amber-400 text-white'
-                            : 'bg-stone-900/80 border-stone-800 text-stone-300 hover:bg-stone-800'
+                        disabled={isRulesLocked}
+                        onClick={() => {
+                          if (isRulesLocked) return;
+                          soundEngine.playClick();
+                          setGameVariant(v.id);
+                        }}
+                        className={`p-2.5 rounded-xl border text-left transition ${
+                          isRulesLocked
+                            ? active
+                              ? 'bg-amber-500/15 border-amber-400/70 text-white opacity-85 cursor-not-allowed'
+                              : 'bg-stone-900/50 border-stone-800/70 text-stone-500 opacity-50 cursor-not-allowed'
+                            : active
+                            ? 'bg-amber-500/15 border-amber-400 text-white cursor-pointer'
+                            : 'bg-stone-900/80 border-stone-800 text-stone-300 hover:bg-stone-800 cursor-pointer'
                         }`}
                       >
                         <div className="font-black text-xs flex items-center justify-between">
@@ -299,11 +335,20 @@ export const SettingsModal = ({
                       <button
                         key={m.id}
                         type="button"
-                        onClick={() => { soundEngine.playClick(); setScoringMode(m.id); }}
-                        className={`p-2.5 rounded-xl border text-left transition cursor-pointer flex items-center justify-between ${
-                          active
-                            ? 'bg-emerald-500/15 border-emerald-400 text-white'
-                            : 'bg-stone-900/80 border-stone-800 text-stone-300 hover:bg-stone-800'
+                        disabled={isRulesLocked}
+                        onClick={() => {
+                          if (isRulesLocked) return;
+                          soundEngine.playClick();
+                          setScoringMode(m.id);
+                        }}
+                        className={`p-2.5 rounded-xl border text-left transition flex items-center justify-between ${
+                          isRulesLocked
+                            ? active
+                              ? 'bg-emerald-500/15 border-emerald-400/70 text-white opacity-85 cursor-not-allowed'
+                              : 'bg-stone-900/50 border-stone-800/70 text-stone-500 opacity-50 cursor-not-allowed'
+                            : active
+                            ? 'bg-emerald-500/15 border-emerald-400 text-white cursor-pointer'
+                            : 'bg-stone-900/80 border-stone-800 text-stone-300 hover:bg-stone-800 cursor-pointer'
                         }`}
                       >
                         <div>
@@ -330,11 +375,20 @@ export const SettingsModal = ({
                       <button
                         key={pts}
                         type="button"
-                        onClick={() => { soundEngine.playClick(); setTargetScore(pts); }}
-                        className={`py-2 px-3 rounded-xl font-black text-xs border transition cursor-pointer ${
-                          active
-                            ? 'bg-amber-400 text-stone-950 border-white shadow'
-                            : 'bg-stone-900 text-stone-300 border-stone-700 hover:bg-stone-800'
+                        disabled={isRulesLocked}
+                        onClick={() => {
+                          if (isRulesLocked) return;
+                          soundEngine.playClick();
+                          setTargetScore(pts);
+                        }}
+                        className={`py-2 px-3 rounded-xl font-black text-xs border transition ${
+                          isRulesLocked
+                            ? active
+                              ? 'bg-amber-400/80 text-stone-950 border-white/70 opacity-85 cursor-not-allowed'
+                              : 'bg-stone-900/50 text-stone-500 border-stone-800 opacity-50 cursor-not-allowed'
+                            : active
+                            ? 'bg-amber-400 text-stone-950 border-white shadow cursor-pointer'
+                            : 'bg-stone-900 text-stone-300 border-stone-700 hover:bg-stone-800 cursor-pointer'
                         }`}
                       >
                         {pts} pts

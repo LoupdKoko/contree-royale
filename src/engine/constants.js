@@ -237,6 +237,7 @@ export const ACHIEVEMENTS = [
 
 export const QUICK_CHATS = [
   "Bien joué ! 👏",
+  "Super combat ! 👍",
   "Merci partenaire ! 🤝",
   "Aïe aïe aïe... 😬",
   "Oups, pardon ! 😅",
@@ -246,9 +247,23 @@ export const QUICK_CHATS = [
   "Bien tenté ! 😉"
 ];
 
-export const BOT_NAMES = {
-  'S': 'Marius (Bot)',
-  'W': 'Fanny (Bot)',
-  'N': 'César (Bot)',
-  'E': 'Honoré (Bot)'
+export const BOT_NAME_POOLS = {
+  BEGINNER: [
+    'Pépé Toussaint',
+    'Tonton Ange',
+    'Ziu Battì',
+    'Nonnu Santu'
+  ],
+  INTERMEDIATE: [
+    'Paulu de la Balagne',
+    "Ghjuvan'Carlu",
+    "L'Oncle Saveriu",
+    'Mattea du Maquis'
+  ],
+  PRO: [
+    'Don Pasquale',
+    'Le Vieux Petru',
+    "Antò l'Ancien",
+    'Nonnu Ghjaseppu'
+  ]
 };

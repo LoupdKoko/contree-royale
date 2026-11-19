@@ -26,8 +26,7 @@ import {
   TABLE_THEMES,
   CARD_BACK_THEMES,
   DEFAULT_PLAYER_STATS,
-  QUICK_CHATS,
-  BOT_NAMES
+  QUICK_CHATS
 } from './engine/constants';
 import {
   getTeam,
@@ -43,6 +42,7 @@ import {
   calculateRoundScore
 } from './engine/rules';
 import { decideBotBid, decideBotCard } from './engine/botAI';
+import { assignBotNamesForSeats, pickSingleBotName } from './engine/botNames';
 import { PlayingCard, CardBack } from './components/PlayingCard';
 import {
   PlayerAvatarBadge,
@@ -89,6 +89,41 @@ function generateShortCode(length = 5) {
 
 function createBubbleId() {
   return generateShortCode(8);
+}
+
+function createSoundEventId() {
+  return 'snd_' + generateShortCode(10);
+}
+
+function playRemoteSoundEvent(soundEvt, nextState, myUid) {
+  if (!soundEvt || !nextState) return;
+  const guestSeat = SEATS.find((s) => nextState.seats?.[s]?.uid === myUid) || 'S';
+
+  if (soundEvt.kind === 'BID') {
+    if (soundEvt.actorSeat !== guestSeat) {
+      soundEngine.playBidSound(soundEvt.bidType);
+    }
+  } else if (soundEvt.kind === 'CARD') {
+    if (soundEvt.actorSeat !== guestSeat) {
+      soundEngine.playCardSlap();
+    }
+    if (soundEvt.isBelote) {
+      soundEngine.playBidSound('BID');
+    }
+  } else if (soundEvt.kind === 'TRICK_SWEEP') {
+    soundEngine.playTrickSweep();
+  } else if (soundEvt.kind === 'ROUND_END') {
+    soundEngine.playTrickSweep();
+    if (soundEvt.isFanny) {
+      soundEngine.playFannySound(getTeam(guestSeat) === soundEvt.winnerTeam);
+    } else {
+      soundEngine.playRoundEnd(soundEvt.isContractMade);
+    }
+  } else if (soundEvt.kind === 'CHAT' || soundEvt.kind === 'CLICK') {
+    if (soundEvt.actorSeat !== guestSeat) {
+      soundEngine.playClick();
+    }
+  }
 }
 
 async function authenticateFirebaseUser(fallbackUid) {
@@ -247,6 +282,7 @@ export default function App() {
   const gameStateRef = useRef(null);
   const peerMessageHandlerRef = useRef(null);
   const lastRecordedRoundIdRef = useRef(null);
+  const lastPlayedSoundIdRef = useRef(null);
 
   useEffect(() => {
     gameStateRef.current = gameState;
@@ -278,18 +314,30 @@ export default function App() {
       localStorage.setItem('contree_training_trump_helper', String(trainingTrumpHelper));
     } catch {}
     if (gameStateRef.current && (mode === 'LOCAL' || gameStateRef.current.hostId === myUid)) {
+      const isLobby = gameStateRef.current.status === 'LOBBY';
       const updated = {
         ...gameStateRef.current,
-        botDifficulty,
+        botDifficulty: isLobby ? botDifficulty : gameStateRef.current.botDifficulty,
         botSpeed,
-        gameVariant,
-        scoringMode,
-        targetScore
+        gameVariant: isLobby ? gameVariant : gameStateRef.current.gameVariant,
+        scoringMode: isLobby ? scoringMode : gameStateRef.current.scoringMode,
+        targetScore: isLobby ? targetScore : gameStateRef.current.targetScore
       };
       gameStateRef.current = updated;
       setGameState(updated);
     }
   }, [botDifficulty, botSpeed, gameVariant, scoringMode, targetScore, tableTheme, cardBackTheme, trainingTrumpHelper, mode, myUid]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const handleUnlockAudio = () => soundEngine.unlock();
+    window.addEventListener('pointerdown', handleUnlockAudio, { passive: true });
+    window.addEventListener('keydown', handleUnlockAudio, { passive: true });
+    return () => {
+      window.removeEventListener('pointerdown', handleUnlockAudio);
+      window.removeEventListener('keydown', handleUnlockAudio);
+    };
+  }, []);
 
   useEffect(() => {
     if (typeof document !== 'undefined') {
@@ -339,7 +387,7 @@ export default function App() {
     };
   }, []);
 
-  const [selectedBidValue, setSelectedBidValue] = useState(80);
+  const [bidSelection, setBidSelection] = useState({ key: '', value: 80 });
   const [showLastTrickModal, setShowLastTrickModal] = useState(false);
   const [showRulesModal, setShowRulesModal] = useState(false);
   const [showDesktopModal, setShowDesktopModal] = useState(false);
@@ -512,6 +560,7 @@ export default function App() {
       try { peerJsInstanceRef.current.destroy(); } catch {}
       peerJsInstanceRef.current = null;
     }
+    lastPlayedSoundIdRef.current = null;
     setP2pStatus('IDLE');
   };
 
@@ -533,7 +582,7 @@ export default function App() {
     if (updated.status === 'LOBBY') {
       updated.seats[seatKey] = {
         uid: `bot_${seatKey}`,
-        name: BOT_NAMES[seatKey],
+        name: pickSingleBotName(updated.seats, updated.botDifficulty || botDifficulty, seatKey),
         isBot: true
       };
     } else {
@@ -903,11 +952,63 @@ export default function App() {
     }
   };
 
+  const handleChangeBotDifficulty = (nextDifficulty) => {
+    // Une fois la partie lancée (Solo ou Multijoueur), personne ne peut plus modifier la difficulté des bots
+    if (mode !== 'HOME') {
+      const current = gameStateRef.current;
+      if (!current || current.status !== 'LOBBY' || current.hostId !== myUid) {
+        return;
+      }
+      setBotDifficulty(nextDifficulty);
+      const updatedSeats = assignBotNamesForSeats(current.seats, nextDifficulty);
+      updateGameState({
+        ...current,
+        botDifficulty: nextDifficulty,
+        seats: updatedSeats
+      });
+      return;
+    }
+    setBotDifficulty(nextDifficulty);
+  };
+
+  const handleChangeGameRuleSetting = (field, nextValue, setter) => {
+    if (mode !== 'HOME') {
+      const current = gameStateRef.current;
+      if (!current || current.status !== 'LOBBY' || current.hostId !== myUid) {
+        return;
+      }
+      setter(nextValue);
+      updateGameState({
+        ...current,
+        [field]: nextValue
+      });
+      return;
+    }
+    setter(nextValue);
+  };
+
+  const handleChangeGameVariant = (nextVariant) =>
+    handleChangeGameRuleSetting('gameVariant', nextVariant, setGameVariant);
+  const handleChangeScoringMode = (nextMode) =>
+    handleChangeGameRuleSetting('scoringMode', nextMode, setScoringMode);
+  const handleChangeTargetScore = (nextTarget) =>
+    handleChangeGameRuleSetting('targetScore', nextTarget, setTargetScore);
+
   const createInitialState = (hostId, hostName, isLocal = false) => {
     const hands = createAndDealDeck('E');
+    const initialSeats = assignBotNamesForSeats(
+      {
+        S: { uid: hostId, name: hostName || 'Joueur 1', isBot: false },
+        W: { uid: 'bot_W', name: '', isBot: true },
+        N: { uid: 'bot_N', name: '', isBot: true },
+        E: { uid: 'bot_E', name: '', isBot: true }
+      },
+      botDifficulty
+    );
     return {
       hostId,
       createdAt: Date.now(),
+      dealNumber: 1,
       status: isLocal ? 'BIDDING' : 'LOBBY',
       botDifficulty,
       botSpeed,
@@ -916,12 +1017,7 @@ export default function App() {
       targetScore,
       dealer: 'E',
       currentTurn: 'S',
-      seats: {
-        S: { uid: hostId, name: hostName || 'Joueur 1', isBot: false },
-        W: { uid: 'bot_W', name: BOT_NAMES.W, isBot: true },
-        N: { uid: 'bot_N', name: BOT_NAMES.N, isBot: true },
-        E: { uid: 'bot_E', name: BOT_NAMES.E, isBot: true }
-      },
+      seats: initialSeats,
       scores: { NS: 0, EW: 0 },
       hands,
       bids: [],
@@ -949,6 +1045,7 @@ export default function App() {
       declarationsResult: null,
       readySeats: {},
       bubbles: {},
+      lastSoundEvent: null,
       roundSummary: null
     };
   };
@@ -988,12 +1085,29 @@ export default function App() {
     if (!targetOccupant.isBot && targetOccupant.uid !== claimantUid) return;
 
     const newSeats = { ...current.seats };
-    if (currentSeat) {
-      newSeats[currentSeat] = { uid: `bot_${currentSeat}`, name: BOT_NAMES[currentSeat], isBot: true };
-    }
+    const activeDifficulty = current.botDifficulty || botDifficulty;
     newSeats[targetSeat] = { uid: claimantUid, name: claimantName, isBot: false, isTempBot: false };
+    if (currentSeat) {
+      const canRecycleTargetBotName =
+        targetOccupant?.isBot &&
+        !targetOccupant.isTempBot &&
+        targetOccupant.name &&
+        targetOccupant.name.trim().toLowerCase() !== claimantName.trim().toLowerCase();
+      const botNameForOldSeat = canRecycleTargetBotName
+        ? targetOccupant.name
+        : pickSingleBotName(newSeats, activeDifficulty, currentSeat);
+      newSeats[currentSeat] = { uid: `bot_${currentSeat}`, name: botNameForOldSeat, isBot: true };
+    }
 
-    await updateGameState({ ...current, seats: newSeats });
+    await updateGameState({
+      ...current,
+      seats: newSeats,
+      lastSoundEvent: {
+        id: createSoundEventId(),
+        kind: 'CLICK',
+        actorSeat: targetSeat
+      }
+    });
   };
 
   const relativeSeats = useMemo(() => {
@@ -1008,13 +1122,20 @@ export default function App() {
 
   const myHand = gameState?.hands?.[mySeat] || [];
 
+  const bidTurnKey = gameState?.status === 'BIDDING'
+    ? `${gameState.createdAt || 0}_${gameState.dealNumber || 1}_${gameState.bids?.length || 0}_${gameState.currentTurn || ''}`
+    : 'IDLE';
+
   const activeBidValue = useMemo(() => {
     const nextMin = gameState?.highestBid ? gameState.highestBid.value + 10 : 80;
     const validNext = BID_VALUES.find(v => v >= nextMin) || 250;
-    return selectedBidValue >= validNext ? selectedBidValue : validNext;
-  }, [gameState?.highestBid, selectedBidValue]);
+    if (bidSelection.key === bidTurnKey && bidSelection.value >= validNext) {
+      return bidSelection.value;
+    }
+    return validNext;
+  }, [gameState?.highestBid, bidSelection, bidTurnKey]);
 
-  const startNewDeal = async (stateSnapshot, nextDealerSeat, resetMatchScores = false) => {
+  const startNewDeal = async (stateSnapshot, nextDealerSeat, resetMatchScores = false, soundEventOverride = null) => {
     soundEngine.playClick();
     const current = stateSnapshot || gameStateRef.current;
     if (!current) return;
@@ -1034,6 +1155,7 @@ export default function App() {
 
     const nextState = {
       ...current,
+      dealNumber: (current.dealNumber || 1) + 1,
       scores: resetMatchScores ? { NS: 0, EW: 0 } : current.scores,
       status: 'BIDDING',
       botDifficulty: current.botDifficulty || botDifficulty,
@@ -1069,6 +1191,7 @@ export default function App() {
       declarationsResult: null,
       readySeats: {},
       bubbles: {},
+      lastSoundEvent: soundEventOverride,
       roundSummary: null
     };
 
@@ -1188,7 +1311,12 @@ export default function App() {
 
       if (!newState.highestBid && newState.consecutivePasses >= 4) {
         newState.bubbles[seat] = { text: '4 Passe ! On redistribue', type: 'info', id: Date.now() };
-        await startNewDeal(newState, getNextSeat(newState.dealer));
+        await startNewDeal(newState, getNextSeat(newState.dealer), false, {
+          id: createSoundEventId(),
+          kind: 'BID',
+          bidType: 'PASS',
+          actorSeat: seat
+        });
         return;
       }
 
@@ -1202,6 +1330,13 @@ export default function App() {
         newState.consecutivePasses += 1;
         nextTurn = getNextSeat(nextTurn);
       }
+
+      newState.lastSoundEvent = {
+        id: createSoundEventId(),
+        kind: 'BID',
+        bidType: 'PASS',
+        actorSeat: seat
+      };
 
       if (newState.highestBid && newState.consecutivePasses >= 3) {
         return finalizeBiddingPhase(newState);
@@ -1229,6 +1364,12 @@ export default function App() {
         type: 'bid',
         id: Date.now()
       };
+      newState.lastSoundEvent = {
+        id: createSoundEventId(),
+        kind: 'BID',
+        bidType: 'BID',
+        actorSeat: seat
+      };
       newState.currentTurn = nextTurn;
       await updateGameState(newState);
       return;
@@ -1241,6 +1382,12 @@ export default function App() {
       newState.consecutivePasses = 0;
       newState.bids.push({ seat, type: 'COINCHE' });
       newState.bubbles[seat] = { text: 'CONTRÉ ! ⚡', type: 'coinche', id: Date.now() };
+      newState.lastSoundEvent = {
+        id: createSoundEventId(),
+        kind: 'BID',
+        bidType: 'COINCHE',
+        actorSeat: seat
+      };
       newState.currentTurn = nextTurn;
       await updateGameState(newState);
       return;
@@ -1251,6 +1398,12 @@ export default function App() {
       newState.coincheStatus = 4;
       newState.bids.push({ seat, type: 'SURCOINCHE' });
       newState.bubbles[seat] = { text: 'SURCONTRÉ ! 🔥🔥', type: 'surcoinche', id: Date.now() };
+      newState.lastSoundEvent = {
+        id: createSoundEventId(),
+        kind: 'BID',
+        bidType: 'SURCOINCHE',
+        actorSeat: seat
+      };
       return finalizeBiddingPhase(newState);
     }
   };
@@ -1280,6 +1433,7 @@ export default function App() {
     newState.hands[seat] = newState.hands[seat].filter(c => c.id !== card.id);
     newState.currentTrick.push({ seat, card });
 
+    let triggeredBelote = false;
     if (
       newState.beloteHolder === seat &&
       card.suit === newState.trumpSuit &&
@@ -1288,14 +1442,23 @@ export default function App() {
       soundEngine.playBidSound('BID');
       if (newState.beloteStep === 0) {
         newState.beloteStep = 1;
+        triggeredBelote = true;
         newState.bubbles[seat] = { text: 'Belote ! 👑', type: 'belote', id: Date.now() };
       } else if (newState.beloteStep === 1) {
         newState.beloteStep = 2;
+        triggeredBelote = true;
         newState.bubbles[seat] = { text: 'Rebelote ! (+20 pts) 👑', type: 'belote', id: Date.now() };
       }
     } else if (newState.bubbles[seat]?.type !== 'declaration') {
       delete newState.bubbles[seat];
     }
+
+    newState.lastSoundEvent = {
+      id: createSoundEventId(),
+      kind: 'CARD',
+      actorSeat: seat,
+      isBelote: triggeredBelote
+    };
 
     if (newState.currentTrick.length < 4) {
       newState.currentTurn = getNextSeat(seat);
@@ -1363,6 +1526,10 @@ export default function App() {
     if (!isLastTrick) {
       newState.status = 'PLAYING';
       newState.currentTurn = winnerSeat;
+      newState.lastSoundEvent = {
+        id: createSoundEventId(),
+        kind: 'TRICK_SWEEP'
+      };
       await updateGameState(newState);
       return;
     }
@@ -1428,6 +1595,13 @@ export default function App() {
     };
 
     newState.status = isGameOver ? 'GAME_OVER' : 'ROUND_SUMMARY';
+    newState.lastSoundEvent = {
+      id: createSoundEventId(),
+      kind: 'ROUND_END',
+      isContractMade: scoreOutcome.isContractMade,
+      isFanny,
+      winnerTeam: newState.scores.NS >= newState.scores.EW ? 'NS' : 'EW'
+    };
 
     await updateGameState(newState);
   };
@@ -1450,6 +1624,11 @@ export default function App() {
 
     const newState = JSON.parse(JSON.stringify(current));
     newState.bubbles[targetSeat] = { text, type: 'chat', id: Date.now() };
+    newState.lastSoundEvent = {
+      id: createSoundEventId(),
+      kind: 'CHAT',
+      actorSeat: targetSeat
+    };
     await updateGameState(newState);
   };
 
@@ -1461,6 +1640,14 @@ export default function App() {
         if (!msg) return;
 
         if (msg.type === 'SYNC_STATE' && msg.state) {
+          const prevState = gameStateRef.current;
+          const soundEvt = msg.state.lastSoundEvent;
+          if (!prevState || prevState.createdAt !== msg.state.createdAt) {
+            lastPlayedSoundIdRef.current = soundEvt?.id || null;
+          } else if (soundEvt?.id && soundEvt.id !== lastPlayedSoundIdRef.current) {
+            lastPlayedSoundIdRef.current = soundEvt.id;
+            playRemoteSoundEvent(soundEvt, msg.state, myUid);
+          }
           gameStateRef.current = msg.state;
           setGameState(msg.state);
           return;
@@ -1510,6 +1697,21 @@ export default function App() {
               isBot: false,
               isTempBot: false
             };
+            // Évite toute collision si le pseudo de l'invité correspond au nom d'un bot encore assis
+            SEATS.forEach((s) => {
+              const occ = updated.seats[s];
+              if (
+                s !== freeSeat &&
+                occ?.isBot &&
+                !occ.isTempBot &&
+                occ.name?.trim().toLowerCase() === msg.name?.trim().toLowerCase()
+              ) {
+                updated.seats[s] = {
+                  ...occ,
+                  name: pickSingleBotName(updated.seats, updated.botDifficulty || botDifficulty, s)
+                };
+              }
+            });
             updated.bubbles = {
               ...(updated.bubbles || {}),
               [freeSeat]: { text: `${msg.name} a rejoint la table ! 🎉`, type: 'chat', id: Date.now() }
@@ -1771,7 +1973,7 @@ export default function App() {
                   Partie Solo vs Bots ({BOT_DIFFICULTIES[botDifficulty]?.label})
                 </h2>
                 <p className="text-xs text-stone-300 mb-4 leading-relaxed">
-                  Lancez immédiatement une table complète avec nos 3 bots (César, Fanny et Honoré) réglés sur le niveau <strong>{BOT_DIFFICULTIES[botDifficulty]?.label}</strong>.
+                  Lancez immédiatement une table complète avec 3 anciens du bistrot réglés sur le niveau <strong>{BOT_DIFFICULTIES[botDifficulty]?.label}</strong>.
                 </p>
 
                 <ul className="text-xs text-stone-300 space-y-2 mb-6">
@@ -1816,7 +2018,7 @@ export default function App() {
             audioSettings={audioSettings}
             setAudioSettings={setAudioSettings}
             botDifficulty={botDifficulty}
-            setBotDifficulty={setBotDifficulty}
+            setBotDifficulty={handleChangeBotDifficulty}
             botSpeed={botSpeed}
             setBotSpeed={setBotSpeed}
             gameVariant={gameVariant}
@@ -2049,8 +2251,7 @@ export default function App() {
                         key={lvl.id}
                         onClick={() => {
                           soundEngine.playClick();
-                          setBotDifficulty(lvl.id);
-                          updateGameState({ ...gameState, botDifficulty: lvl.id });
+                          handleChangeBotDifficulty(lvl.id);
                         }}
                         className={`px-3 py-1.5 rounded-xl text-xs font-black transition cursor-pointer ${
                           active ? 'bg-amber-400 text-stone-950' : 'bg-stone-800 text-stone-300 hover:bg-stone-700'
@@ -2192,7 +2393,18 @@ export default function App() {
 
             {isHost ? (
               <button
-                onClick={() => updateGameState({ ...gameState, status: 'BIDDING' })}
+                onClick={() => {
+                  soundEngine.playClick();
+                  updateGameState({
+                    ...gameState,
+                    status: 'BIDDING',
+                    lastSoundEvent: {
+                      id: createSoundEventId(),
+                      kind: 'CLICK',
+                      actorSeat: mySeat
+                    }
+                  });
+                }}
                 className="w-full sm:w-auto px-8 py-4 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-stone-950 font-black text-base shadow-xl flex items-center justify-center gap-2 transition cursor-pointer"
               >
                 <Play className="w-5 h-5 fill-stone-950" />
@@ -2213,16 +2425,20 @@ export default function App() {
             onToggleFullscreen={toggleFullscreen}
             audioSettings={audioSettings}
             setAudioSettings={setAudioSettings}
-            botDifficulty={botDifficulty}
-            setBotDifficulty={setBotDifficulty}
+            botDifficulty={gameState.botDifficulty || botDifficulty}
+            setBotDifficulty={handleChangeBotDifficulty}
+            isBotDifficultyLocked={!isHost}
+            botDifficultyLockReason="Choisi uniquement par l'hôte dans le salon"
             botSpeed={botSpeed}
             setBotSpeed={setBotSpeed}
-            gameVariant={gameVariant}
-            setGameVariant={setGameVariant}
-            scoringMode={scoringMode}
-            setScoringMode={setScoringMode}
-            targetScore={targetScore}
-            setTargetScore={setTargetScore}
+            gameVariant={gameState.gameVariant || gameVariant}
+            setGameVariant={handleChangeGameVariant}
+            scoringMode={gameState.scoringMode || scoringMode}
+            setScoringMode={handleChangeScoringMode}
+            targetScore={gameState.targetScore || targetScore}
+            setTargetScore={handleChangeTargetScore}
+            isRulesLocked={!isHost}
+            rulesLockReason="Choisi uniquement par l'hôte dans le salon"
             tableTheme={tableTheme}
             setTableTheme={setTableTheme}
             cardBackTheme={cardBackTheme}
@@ -2545,7 +2761,7 @@ export default function App() {
                   isMyTurn={isMyTurn}
                   mySeat={mySeat}
                   selectedBidValue={activeBidValue}
-                  setSelectedBidValue={setSelectedBidValue}
+                  setSelectedBidValue={(val) => setBidSelection({ key: bidTurnKey, value: val })}
                   onBidAction={(action) => handleBidAction(mySeat, action)}
                 />
               )}
@@ -2825,6 +3041,16 @@ export default function App() {
                       Forcer le lancement de la revanche (Hôte)
                     </button>
                   )}
+                  <button
+                    onClick={() => {
+                      soundEngine.playClick();
+                      cleanupP2P();
+                      setMode('HOME');
+                    }}
+                    className="w-full py-3 bg-stone-800 hover:bg-stone-700 text-stone-200 font-bold text-sm rounded-xl border border-stone-700 flex items-center justify-center gap-2 transition cursor-pointer"
+                  >
+                    <LogOut className="w-4 h-4" /> Retour au menu principal
+                  </button>
                 </div>
               ) : (
                 <div className="space-y-2 text-center">
@@ -2896,16 +3122,20 @@ export default function App() {
           onToggleFullscreen={toggleFullscreen}
           audioSettings={audioSettings}
           setAudioSettings={setAudioSettings}
-          botDifficulty={botDifficulty}
-          setBotDifficulty={setBotDifficulty}
+          botDifficulty={gameState.botDifficulty || botDifficulty}
+          setBotDifficulty={handleChangeBotDifficulty}
+          isBotDifficultyLocked={true}
+          botDifficultyLockReason="Verrouillé une fois la partie lancée"
           botSpeed={botSpeed}
           setBotSpeed={setBotSpeed}
-          gameVariant={gameVariant}
-          setGameVariant={setGameVariant}
-          scoringMode={scoringMode}
-          setScoringMode={setScoringMode}
-          targetScore={targetScore}
-          setTargetScore={setTargetScore}
+          gameVariant={gameState.gameVariant || gameVariant}
+          setGameVariant={handleChangeGameVariant}
+          scoringMode={gameState.scoringMode || scoringMode}
+          setScoringMode={handleChangeScoringMode}
+          targetScore={gameState.targetScore || targetScore}
+          setTargetScore={handleChangeTargetScore}
+          isRulesLocked={true}
+          rulesLockReason="Verrouillé une fois la partie lancée"
           tableTheme={tableTheme}
           setTableTheme={setTableTheme}
           cardBackTheme={cardBackTheme}

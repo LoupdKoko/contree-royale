@@ -1,6 +1,6 @@
 <div align="center">
 
-  <img src="public/logo.svg" alt="Contrée Royale Logo" width="128" height="128" />
+  <img src="public/LogoCRO.png" alt="Contrée Royale Logo" width="128" height="128" />
 
   # 👑 Contrée Royale Online
 

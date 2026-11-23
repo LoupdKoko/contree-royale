@@ -20,11 +20,11 @@
     "files": [
       "dist/**/*",
       "electron-main.cjs",
-      "public/icon.ico"
+      "public/iconCRO.ico"
     ],
     "win": {
       "target": "portable",
-      "icon": "public/icon.ico"
+      "icon": "public/iconCRO.ico"
     }
   },
   "dependencies": {

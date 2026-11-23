@@ -1828,17 +1828,14 @@ export default function App() {
           </button>
         </div>
 
-        <div className="max-w-5xl w-full flex flex-col items-center text-center mb-5">
-          <div className="relative mb-2">
-            <div className="flex items-center justify-center gap-2 bg-gradient-to-b from-amber-300 to-amber-600 text-stone-950 px-5 py-1.5 rounded-full font-black text-xs uppercase tracking-widest shadow-lg border border-amber-200">
-              <Crown className="w-4 h-4 fill-stone-950" /> Édition Officielle Multijoueur
-            </div>
-          </div>
-
-          <h1 className="text-4xl sm:text-6xl font-black tracking-tight text-transparent bg-clip-text bg-gradient-to-b from-white via-amber-100 to-amber-400 drop-shadow-[0_4px_12px_rgba(0,0,0,0.6)]">
-            CONTRÉE ROYALE
-          </h1>
-          <p className="text-emerald-200/90 mt-1.5 text-sm sm:text-base max-w-lg font-medium">
+        <div className="max-w-5xl w-full flex flex-col items-center text-center mb-4">
+          <img
+            src={`${import.meta.env.BASE_URL}LogoCRO.png`}
+            alt="Contrée Royale Online"
+            draggable={false}
+            className="h-32 sm:h-40 md:h-44 w-auto object-contain drop-shadow-[0_10px_24px_rgba(0,0,0,0.65)]"
+          />
+          <p className="text-emerald-200/90 mt-2 text-sm sm:text-base max-w-lg font-medium">
             Jouez à la vraie Belote Contrée ou Coinche avec vos amis en équipe Nord-Sud ou contre nos bots !
           </p>
         </div>
